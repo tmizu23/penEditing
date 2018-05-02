@@ -49,33 +49,34 @@ class PenEditingTool(QgsMapTool):
         #マウス位置をプロジェクトの座標系で返す
         #スナップ地点をハイライトする（スナップはしない.閾値は4ピクセル）
         #描画中のスタート地点へのスナップは自分で実装.
-        self.snapmarker.hide()
-        x = event.pos().x()
-        y = event.pos().y()
+        # self.snapmarker.hide()
+        # x = event.pos().x()
+        # y = event.pos().y()
 
-        startingPoint = QPoint(x, y)
-        snapper = QgsMapCanvasSnapper(self.canvas)
-        d = self.canvas.mapUnitsPerPixel() * 4
-        (retval, result) = snapper.snapToCurrentLayer(startingPoint,QgsSnapper.SnapToVertex,d)
-        if result:
-            point = result[0].snappedVertex
-            self.snapmarker.setCenter(point)
-            self.snapmarker.show()
-            point = self.toLayerCoordinates(layer,point)
-        else:
-            point = self.toLayerCoordinates(layer, event.pos())
+        # startingPoint = QPoint(x, y)
+        # snapper = QgsMapCanvasSnapper(self.canvas)
+        # d = self.canvas.mapUnitsPerPixel() * 4
+        # (retval, result) = snapper.snapToCurrentLayer(startingPoint,QgsSnapper.SnapToVertex,d)
+        # if result:
+        #     point = result[0].snappedVertex
+        #     self.snapmarker.setCenter(point)
+        #     self.snapmarker.show()
+        #     point = self.toLayerCoordinates(layer,point)
+        # else:
+        #     point = self.toLayerCoordinates(layer, event.pos())
 
-        pnt = self.toMapCoordinates(layer, point)
+        #d = self.canvas.mapUnitsPerPixel() * 4
+        pnt = self.toMapCoordinates(event.pos())
 
-        #スタート地点にスナップ。rbは通常のスナップ機能は有効でないため自分で実装
-
-        if self.state=="drawing" or self.state=="editing":
-            if (self.startpoint.x()-d <= pnt.x() <= self.startpoint.x()+d) and (self.startpoint.y()-d<=pnt.y() <= self.startpoint.y()+d):
-                self.snapmarker.setCenter(self.startpoint)
-                self.snapmarker.show()
-
-        point = self.toLayerCoordinates(layer, event.pos())
-        pnt = self.toMapCoordinates(layer, point)
+        # #スタート地点にスナップ。rbは通常のスナップ機能は有効でないため自分で実装
+        #
+        # if self.state=="drawing" or self.state=="editing":
+        #     if (self.startpoint.x()-d <= pnt.x() <= self.startpoint.x()+d) and (self.startpoint.y()-d<=pnt.y() <= self.startpoint.y()+d):
+        #         self.snapmarker.setCenter(self.startpoint)
+        #         self.snapmarker.show()
+        #
+        # point = self.toLayerCoordinates(layer, event.pos())
+        # pnt = self.toMapCoordinates(layer, point)
         return pnt
 
     def distance(self,p1, p2):
@@ -90,10 +91,12 @@ class PenEditingTool(QgsMapTool):
         lastpnt = drawline[-1]
 
         editedgeom = QgsGeometry(f.geometry())
+        self.check_crs()
+        if self.layerCRSSrsid != self.projectCRSSrsid:
+            editedgeom.transform(QgsCoordinateTransform(self.layerCRSSrsid, self.projectCRSSrsid))
         editedline = editedgeom.asPolyline()
-        featid = self.layer.selectedFeaturesIds()
-        startpnt = self.toMapCoordinates(self.layer,startpnt)
-        lastpnt = self.toMapCoordinates(self.layer, lastpnt)
+        featid = [f.id()]
+        #featid = self.layer.selectedFeaturesIds()
         _, near_startpnt, startidx = self.closestPointOfFeature(startpnt,featid)
         near, near_lastpnt, lastidx = self.closestPointOfFeature(lastpnt,featid)
         startpnt_is_nearest_to_edited_start = self.distance(near_startpnt, editedline[startidx-1]) < self.distance(near_lastpnt,
@@ -160,6 +163,9 @@ class PenEditingTool(QgsMapTool):
         tolerance = self.get_tolerance()
         d = self.canvas.mapUnitsPerPixel()
         s = geom.simplify(tolerance*d)
+        self.check_crs()
+        if self.layerCRSSrsid != self.projectCRSSrsid:
+            s.transform(QgsCoordinateTransform(self.projectCRSSrsid, self.layerCRSSrsid))
 
         # validate geometry
         f = QgsFeature()
@@ -186,6 +192,9 @@ class PenEditingTool(QgsMapTool):
         tolerance = self.get_tolerance()
         d = self.canvas.mapUnitsPerPixel()
         s = geom.simplify(tolerance*d)
+        self.check_crs()
+        if self.layerCRSSrsid != self.projectCRSSrsid:
+            s.transform(QgsCoordinateTransform(self.projectCRSSrsid, self.layerCRSSrsid))
         self.layer.beginEditCommand("Feature edited")
         self.layer.changeGeometry(fid, s)
         self.layer.endEditCommand()
@@ -202,32 +211,50 @@ class PenEditingTool(QgsMapTool):
         near = False
         feature=self.getFeatureById(featid)
         if feature is not None and self.layer.featureCount() > 0:
-            pnt = self.toLayerCoordinates(self.layer, point)
-            (dist, minDistPoint, afterVertex)=feature.geometry().closestSegmentWithContext(pnt)
+            geom = QgsGeometry(feature.geometry())
+            self.check_crs()
+            if self.layerCRSSrsid != self.projectCRSSrsid:
+                geom.transform(QgsCoordinateTransform(self.layerCRSSrsid, self.projectCRSSrsid))
+            (dist, minDistPoint, afterVertex)=geom.closestSegmentWithContext(point)
             d = self.canvas.mapUnitsPerPixel() * 10
-            #self.log("dist:{},d:{},{},{},{}".format(math.sqrt(dist),d,featid,point,pnt))
             if math.sqrt(dist) < d:
                 near = True
             return near,minDistPoint,afterVertex
         else:
             return near,None,None
 
-    def canvasDoubleClickEvent(self,event):
-        #近い地物を選択
-
-        self.canvas.currentLayer().removeSelection()
-        point = self.toLayerCoordinates(self.layer, event.pos())
+    def getNearFeature(self, point):
         d = self.canvas.mapUnitsPerPixel() * 4
+        rect = QgsRectangle((point.x() - d), (point.y() - d), (point.x() + d), (point.y() + d))
+        self.check_crs()
+        if self.layerCRSSrsid != self.projectCRSSrsid:
+            rectGeom = QgsGeometry.fromRect(rect)
+            rectGeom.transform(QgsCoordinateTransform(self.projectCRSSrsid, self.layerCRSSrsid))
+            rect = rectGeom.boundingBox()
         request = QgsFeatureRequest()
         request.setLimit(1)
-        request.setFilterRect(QgsRectangle((point.x() - d), (point.y() - d), (point.x() + d), (point.y() + d)))
+        request.setFilterRect(rect)
         f = [feat for feat in self.layer.getFeatures(request)]  # only one because of setlimit(1)
-        if len(f) == 1:
-            featid = f[0].id()
+        if len(f)==0:
+            return None
+        else:
+            return f[0]
+
+    def canvasDoubleClickEvent(self,event):
+        #近い地物を選択
+        layer = self.canvas.currentLayer()
+        layer.removeSelection()
+        point = self.toMapCoordinates(event.pos())
+        f = self.getNearFeature(point)
+        if f is not None:
+            featid = f.id()
             self.layer.select(featid)
             if self.selected:
-                # 頂点に近い場合は、頂点を削除
-                geom = QgsGeometry(f[0].geometry())
+                # 選択されていて頂点に近い場合は、頂点を削除
+                geom = QgsGeometry(f.geometry())
+                self.check_crs()
+                if self.layerCRSSrsid != self.projectCRSSrsid:
+                    geom.transform(QgsCoordinateTransform(self.layerCRSSrsid,self.projectCRSSrsid))
                 dist,atVertex = geom.closestVertexWithContext(point)
                 d = self.canvas.mapUnitsPerPixel() * 4
                 if math.sqrt(dist) < d:
@@ -259,12 +286,14 @@ class PenEditingTool(QgsMapTool):
         if button_type==2 and near:
             f = self.getFeatureById(featid)
             geom = QgsGeometry(f.geometry())
+            self.check_crs()
+            if self.layerCRSSrsid != self.projectCRSSrsid:
+                geom.transform(QgsCoordinateTransform(self.layerCRSSrsid, self.projectCRSSrsid))
             polyline=geom.asPolyline()
             line1=polyline[0:afterVertex]
             line1.append(minDistPoint)
             line2 = polyline[afterVertex:]
             line2.insert(0,minDistPoint)
-            #self.log("{}".format(line2))
             self.editFeature(QgsGeometry.fromPolyline(line1),f.id())
             self.createFeature(QgsGeometry.fromPolyline(line2),f)
             self.canvas.currentLayer().removeSelection()
@@ -310,10 +339,7 @@ class PenEditingTool(QgsMapTool):
             if self.rb.numberOfVertices() > 2:
                 rbgeom=self.rb.asGeometry()
                 #描画ラインを画面の投影からレイヤの投影に変換
-                self.check_crs()
-                if self.layerCRSSrsid != self.projectCRSSrsid:
-                    rbgeom.transform(QgsCoordinateTransform(self.projectCRSSrsid,self.layerCRSSrsid))
-                feature=self.layer.getFeatures(QgsFeatureRequest().setFilterFids(self.featid)).next()
+                feature = self.getFeatureById(self.featid)
                 self.modify_obj(rbgeom,feature)
             else:
                 pass
@@ -329,9 +355,6 @@ class PenEditingTool(QgsMapTool):
         if self.state == "drawing":
             if self.rb.numberOfVertices() > 2:
                 geom = self.rb.asGeometry()
-                self.check_crs()
-                if self.layerCRSSrsid != self.projectCRSSrsid:
-                    geom.transform(QgsCoordinateTransform(self.projectCRSSrsid, self.layerCRSSrsid))
                 self.createFeature(geom,None)
 
             # reset rubberband and refresh the canvas
@@ -353,10 +376,7 @@ class PenEditingTool(QgsMapTool):
 
     def get_tolerance(self):
         settings = QSettings()
-        if self.layer.crs().projectionAcronym() == "longlat":
-            tolerance = 0.000
-        else:
-            tolerance = settings.value("/penEdit/tolerance",
+        tolerance = settings.value("/penEdit/tolerance",
                                        0.000, type=float)
         return tolerance
 
@@ -371,7 +391,7 @@ class PenEditingTool(QgsMapTool):
     def activate(self):
         self.canvas.setCursor(self.cursor)
         self.layer = self.canvas.currentLayer()
-        self.check_crs()
+        #self.check_crs()
         self.snapmarker = QgsVertexMarker(self.canvas)
         self.snapmarker.setIconType(QgsVertexMarker.ICON_BOX)
         self.snapmarker.setColor(QColor(255,165,0))
