@@ -151,7 +151,7 @@ class PenEditingTool(QgsMapTool):
         geom = QgsGeometry.fromPolyline(polyline)
         self.editFeature(geom, f.id())
 
-    def createFeature(self, geom):
+    def createFeature(self, geom, feat):
         settings = QSettings()
         provider = self.layer.dataProvider()
 
@@ -168,9 +168,14 @@ class PenEditingTool(QgsMapTool):
         # add attribute fields to feature
         fields = self.layer.pendingFields()
         f.initAttributes(fields.count())
-        for i in range(fields.count()):
-            if provider.defaultValue(i):
-                f.setAttribute(i, provider.defaultValue(i))
+
+        if feat is None:
+            for i in range(fields.count()):
+                if provider.defaultValue(i):
+                    f.setAttribute(i, provider.defaultValue(i))
+        else:
+            for i in range(fields.count()):
+                    f.setAttribute(i, feat.attributes()[i])
 
         self.layer.beginEditCommand("Feature added")
         self.layer.addFeature(f)
@@ -185,17 +190,20 @@ class PenEditingTool(QgsMapTool):
         self.layer.changeGeometry(fid, s)
         self.layer.endEditCommand()
 
-    def getFeaturesById(self,featid):
+    def getFeatureById(self,featid):
         features = [f for f in self.layer.getFeatures(QgsFeatureRequest().setFilterFids(featid))]
-        return features
+        if len(features) != 1:
+            return None
+        else:
+            return features[0]
 
     def closestPointOfFeature(self,point,featid):
         #フィーチャとの距離が近いかどうかを確認
         near = False
-        features=self.getFeaturesById(featid)
-        if len(features) == 1 and self.layer.featureCount() > 0:
+        feature=self.getFeatureById(featid)
+        if feature is not None and self.layer.featureCount() > 0:
             pnt = self.toLayerCoordinates(self.layer, point)
-            (dist, minDistPoint, afterVertex)=features[0].geometry().closestSegmentWithContext(pnt)
+            (dist, minDistPoint, afterVertex)=feature.geometry().closestSegmentWithContext(pnt)
             d = self.canvas.mapUnitsPerPixel() * 10
             #self.log("dist:{},d:{},{},{},{}".format(math.sqrt(dist),d,featid,point,pnt))
             if math.sqrt(dist) < d:
@@ -249,16 +257,16 @@ class PenEditingTool(QgsMapTool):
         near,minDistPoint,afterVertex = self.closestPointOfFeature(pnt,featid)
         #self.log("{}".format(minDistPoint))
         if button_type==2 and near:
-            f = self.getFeaturesById(featid)
-            geom = QgsGeometry(f[0].geometry())
+            f = self.getFeatureById(featid)
+            geom = QgsGeometry(f.geometry())
             polyline=geom.asPolyline()
             line1=polyline[0:afterVertex]
             line1.append(minDistPoint)
             line2 = polyline[afterVertex:]
             line2.insert(0,minDistPoint)
             #self.log("{}".format(line2))
-            self.editFeature(QgsGeometry.fromPolyline(line1),f[0].id())
-            self.createFeature(QgsGeometry.fromPolyline(line2))
+            self.editFeature(QgsGeometry.fromPolyline(line1),f.id())
+            self.createFeature(QgsGeometry.fromPolyline(line2),f)
             self.canvas.currentLayer().removeSelection()
 
         # start editing
@@ -324,7 +332,7 @@ class PenEditingTool(QgsMapTool):
                 self.check_crs()
                 if self.layerCRSSrsid != self.projectCRSSrsid:
                     geom.transform(QgsCoordinateTransform(self.projectCRSSrsid, self.layerCRSSrsid))
-                self.createFeature(geom)
+                self.createFeature(geom,None)
 
             # reset rubberband and refresh the canvas
             self.state = "free"

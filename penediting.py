@@ -111,8 +111,7 @@ class PenEditing:
         if (layer.isEditable() and (layer.geometryType() == QGis.Line or
                                     layer.geometryType() == QGis.Polygon)):
             self.pen_edit.setEnabled(True)
-            self.spinBoxAction.setEnabled(
-                layer.crs().projectionAcronym() != "longlat")
+            self.spinBoxAction.setEnabled(True)
             try:  # remove any existing connection first
                 layer.editingStopped.disconnect(self.toggle)
             except TypeError:  # missing connection
