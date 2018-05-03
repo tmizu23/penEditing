@@ -5,6 +5,8 @@ from PyQt4.QtGui import *
 from qgis.core import *
 from qgis.gui import *
 import math
+import numpy as np
+from scipy import interpolate
 
 class PenEditingTool(QgsMapTool):
 
@@ -86,6 +88,7 @@ class PenEditingTool(QgsMapTool):
 
     def modify_obj(self,rbgeom,f):
         drawgeom = QgsGeometry(rbgeom)
+        drawgeom = self.smoothing(drawgeom,"A")
         drawline = drawgeom.asPolyline()
         startpnt = drawline[0]
         lastpnt = drawline[-1]
@@ -96,7 +99,6 @@ class PenEditingTool(QgsMapTool):
             editedgeom.transform(QgsCoordinateTransform(self.layerCRSSrsid, self.projectCRSSrsid))
         editedline = editedgeom.asPolyline()
         featid = [f.id()]
-        #featid = self.layer.selectedFeaturesIds()
         _, near_startpnt, startidx = self.closestPointOfFeature(startpnt,featid)
         near, near_lastpnt, lastidx = self.closestPointOfFeature(lastpnt,featid)
         startpnt_is_nearest_to_edited_start = self.distance(near_startpnt, editedline[startidx-1]) < self.distance(near_lastpnt,
@@ -154,15 +156,29 @@ class PenEditingTool(QgsMapTool):
         geom = QgsGeometry.fromPolyline(polyline)
         self.editFeature(geom, f.id())
 
-    def createFeature(self, geom, feat):
-        settings = QSettings()
-        provider = self.layer.dataProvider()
+    #移動平均でスムージング
+    def smoothing(self,geom,type):
+        poly = geom.asPolyline()
+        poly=np.reshape(poly,(-1,2)).T
+        num = 10
+        b = np.ones(num) / float(num)
+        x_pad = np.pad(poly[0], (num-1, 0), 'edge')
+        y_pad = np.pad(poly[1], (num-1, 0), 'edge')
+        x_smooth = np.convolve(x_pad, b, mode='valid')
+        y_smooth = np.convolve(y_pad, b, mode='valid')
+        poly_smooth = [QgsPoint(x, y) for x,y in zip(x_smooth,y_smooth)]
+        geom_smooth = QgsGeometry.fromPolyline(poly_smooth)
+        return geom_smooth
 
+    def createFeature(self, geom, feat):
+        provider = self.layer.dataProvider()
+        geom = self.smoothing(geom,"A")
         #toleranceで指定したピクセル数以内のゆらぎをシンプルにする
         #simplifyの引数の単位は長さなので変換する
         tolerance = self.get_tolerance()
         d = self.canvas.mapUnitsPerPixel()
         s = geom.simplify(tolerance*d)
+
         self.check_crs()
         if self.layerCRSSrsid != self.projectCRSSrsid:
             s.transform(QgsCoordinateTransform(self.projectCRSSrsid, self.layerCRSSrsid))
