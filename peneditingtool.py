@@ -6,7 +6,6 @@ from qgis.core import *
 from qgis.gui import *
 import math
 import numpy as np
-from scipy import interpolate
 
 class PenEditingTool(QgsMapTool):
 
@@ -14,7 +13,6 @@ class PenEditingTool(QgsMapTool):
         QgsMapTool.__init__(self, canvas)
         self.canvas = canvas
         self.iface = iface
-        self.snapping = True
         self.state = "free" #free,drawing,editing
         self.selected = False
         self.rb = None
@@ -22,7 +20,6 @@ class PenEditingTool(QgsMapTool):
         self.startpoint = None
         self.lastpoint = None
         self.featid = None
-        #self.ignoreclick = False
         self.layer = False
         #our own fancy cursor
         self.cursor = QCursor(QPixmap(["16 16 3 1",
@@ -45,41 +42,6 @@ class PenEditingTool(QgsMapTool):
                                        "    ++.....+    ",
                                        "      ++.++     ",
                                        "       +.+      "]))
-        #QgsMessageLog.logMessage("start pen plugin", 'MyPlugin', QgsMessageLog.INFO)
-
-    def getPoint_with_Highlight(self,event,layer):
-        #マウス位置をプロジェクトの座標系で返す
-        #スナップ地点をハイライトする（スナップはしない.閾値は4ピクセル）
-        #描画中のスタート地点へのスナップは自分で実装.
-        # self.snapmarker.hide()
-        # x = event.pos().x()
-        # y = event.pos().y()
-
-        # startingPoint = QPoint(x, y)
-        # snapper = QgsMapCanvasSnapper(self.canvas)
-        # d = self.canvas.mapUnitsPerPixel() * 4
-        # (retval, result) = snapper.snapToCurrentLayer(startingPoint,QgsSnapper.SnapToVertex,d)
-        # if result:
-        #     point = result[0].snappedVertex
-        #     self.snapmarker.setCenter(point)
-        #     self.snapmarker.show()
-        #     point = self.toLayerCoordinates(layer,point)
-        # else:
-        #     point = self.toLayerCoordinates(layer, event.pos())
-
-        #d = self.canvas.mapUnitsPerPixel() * 4
-        pnt = self.toMapCoordinates(event.pos())
-
-        # #スタート地点にスナップ。rbは通常のスナップ機能は有効でないため自分で実装
-        #
-        # if self.state=="drawing" or self.state=="editing":
-        #     if (self.startpoint.x()-d <= pnt.x() <= self.startpoint.x()+d) and (self.startpoint.y()-d<=pnt.y() <= self.startpoint.y()+d):
-        #         self.snapmarker.setCenter(self.startpoint)
-        #         self.snapmarker.show()
-        #
-        # point = self.toLayerCoordinates(layer, event.pos())
-        # pnt = self.toMapCoordinates(layer, point)
-        return pnt
 
     def distance(self,p1, p2):
         dx = p1[0] - p2[0]
@@ -88,8 +50,8 @@ class PenEditingTool(QgsMapTool):
 
     def modify_obj(self,rbgeom,f):
         drawgeom = QgsGeometry(rbgeom)
-        drawgeom = self.smoothing(drawgeom,"A")
         drawline = drawgeom.asPolyline()
+
         startpnt = drawline[0]
         lastpnt = drawline[-1]
 
@@ -110,30 +72,32 @@ class PenEditingTool(QgsMapTool):
 
         # 部分の修正なので終点も修正オブジェクトの近くで終わっている。ただし、ポリゴンを閉じるような修正はのぞく
         if near and not is_closeline_forward and not is_closeline_reward :
-            # 始点、終点をnearpntに付け替え
-            del drawline[0]
-            drawline.insert(0, near_startpnt)
-            del drawline[-1]
-            drawline.insert(-1, near_lastpnt)
             #drawlineとeditedlineの向きが順方向の場合.
             #startidxが最終vertex上でlastidxが最終vertexを超える場合.2頂点内の修正で、startpntの方がeditedlineの最初のポイントに近い場合
             if (lastidx >= startidx and len(editedline)>2) or (startidx==lastidx and startpnt_is_nearest_to_edited_start):
+                geom = QgsGeometry.fromPolyline(editedline[startidx-1:startidx]+drawline+editedline[lastidx:lastidx+1])
+                drawgeom = self.smoothing(geom)
+                drawline = drawgeom.asPolyline()
                 drawline.reverse()
-                del editedline[startidx:lastidx]
+                del editedline[startidx-1:lastidx+1]
                 for (x0, y0) in drawline:
-                    editedline.insert(startidx, (x0, y0))
+                    editedline.insert(startidx-1, (x0, y0))
 
             #drawlineとeditedlineの向きが逆の場合.上記以外
             else:
-                del editedline[lastidx:startidx]
+                starttmp=editedline[startidx:startidx+1]
+                starttmp.reverse()
+                lasttmp = editedline[lastidx-1:lastidx]
+                lasttmp.reverse()
+                geom = QgsGeometry.fromPolyline(starttmp+drawline+lasttmp)
+                drawgeom = self.smoothing(geom)
+                drawline = drawgeom.asPolyline()
+                del editedline[lastidx-1:startidx+1]
                 for (x0, y0) in drawline:
-                    editedline.insert(lastidx, (x0, y0))
+                    editedline.insert(lastidx-1, (x0, y0))
         # 終点は離れている.もしくはポリゴンを閉じるような場合
         else:
-            # 始点をnearpntに付け替え
-            del drawline[0]
-            drawline.insert(0, near_startpnt)
-            #２点だけの場合、startpntの方がeditedlineの最初のポイントに近い場合。
+            #2点だけの場合、startpntの方がeditedlineの最初のポイントに近い場合。
             is_forward = False
             if len(editedline)==2:
                 if startpnt_is_nearest_to_edited_start:
@@ -143,12 +107,20 @@ class PenEditingTool(QgsMapTool):
                 if (startidx >=len(editedline)/2):
                     is_forward = True
             if is_forward:
+                geom = QgsGeometry.fromPolyline(editedline[startidx-2:startidx]+drawline)
+                drawgeom = self.smoothing(geom)
+                drawline = drawgeom.asPolyline()
                 drawline.reverse()
-                del editedline[startidx:]
+                del editedline[startidx-2:]
                 for (x0, y0) in drawline:
-                    editedline.insert(startidx, (x0, y0))
+                    editedline.insert(startidx-2, (x0, y0))
             else:
-                del editedline[:startidx]
+                tmp=editedline[startidx:startidx+2]
+                tmp.reverse()
+                geom = QgsGeometry.fromPolyline(tmp+drawline)
+                drawgeom = self.smoothing(geom)
+                drawline = drawgeom.asPolyline()
+                del editedline[:startidx+2]
                 for (x0, y0) in drawline:
                     editedline.insert(0, (x0, y0))
 
@@ -157,7 +129,7 @@ class PenEditingTool(QgsMapTool):
         self.editFeature(geom, f.id())
 
     #移動平均でスムージング
-    def smoothing(self,geom,type):
+    def smoothing(self,geom):
         poly = geom.asPolyline()
         poly=np.reshape(poly,(-1,2)).T
         num = 10
@@ -172,7 +144,9 @@ class PenEditingTool(QgsMapTool):
 
     def createFeature(self, geom, feat):
         provider = self.layer.dataProvider()
-        geom = self.smoothing(geom,"A")
+        #新規の時はスムージングする。分割の時はしない
+        if feat is None:
+            geom = self.smoothing(geom)
         #toleranceで指定したピクセル数以内のゆらぎをシンプルにする
         #simplifyの引数の単位は長さなので変換する
         tolerance = self.get_tolerance()
@@ -285,20 +259,14 @@ class PenEditingTool(QgsMapTool):
             return False,featid_list
 
     def canvasPressEvent(self, event):
-        # if self.ignoreclick:
-        #     # ignore secondary canvasPressEvents if already drag-drawing
-        #     # NOTE: canvasReleaseEvent will still occur (ensures rb is deleted)
-        #     # click on multi-button input device will halt drag-drawing
-        #     return
         self.layer = self.canvas.currentLayer()
         if not self.layer:
             return
         button_type = event.button()
 
-        pnt = self.getPoint_with_Highlight(event, self.layer)
+        pnt = self.toMapCoordinates(event.pos())
         self.selected, featid = self.check_selection()
         near,minDistPoint,afterVertex = self.closestPointOfFeature(pnt,featid)
-        #self.log("{}".format(minDistPoint))
         if button_type==2 and near:
             f = self.getFeatureById(featid)
             geom = QgsGeometry(f.geometry())
@@ -342,7 +310,7 @@ class PenEditingTool(QgsMapTool):
         if not self.layer:
             return
         #ポイントに近いポイント
-        pnt = self.getPoint_with_Highlight(event, self.layer)
+        pnt = self.toMapCoordinates(event.pos())
         #作成中、編集中
         if self.state=="editing" or self.state=="drawing":
             self.lastpoint = pnt
@@ -396,29 +364,15 @@ class PenEditingTool(QgsMapTool):
                                        0.000, type=float)
         return tolerance
 
-
-    # def setIgnoreClick(self, ignore):
-    #     """Used to keep the tool from registering clicks during modal dialogs"""
-    #     self.ignoreclick = ignore
-
     def showSettingsWarning(self):
         pass
 
     def activate(self):
         self.canvas.setCursor(self.cursor)
         self.layer = self.canvas.currentLayer()
-        #self.check_crs()
-        self.snapmarker = QgsVertexMarker(self.canvas)
-        self.snapmarker.setIconType(QgsVertexMarker.ICON_BOX)
-        self.snapmarker.setColor(QColor(255,165,0))
-        self.snapmarker.setPenWidth(3)
-        self.snapmarker.setIconSize(10)
-        self.snapmarker.hide()
         self.startmarker = QgsVertexMarker(self.canvas)
         self.startmarker.setIconType(QgsVertexMarker.ICON_X)
         self.startmarker.hide()
-
-
 
     def deactivate(self):
         pass
