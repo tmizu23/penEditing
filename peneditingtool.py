@@ -174,8 +174,18 @@ class PenEditingTool(QgsMapTool):
                     f.setAttribute(i, feat.attributes()[i])
 
         self.layer.beginEditCommand("Feature added")
-        self.layer.addFeature(f)
-        self.layer.endEditCommand()
+
+        settings = QSettings()
+        disable_attributes = settings.value("/qgis/digitizing/disable_enter_attribute_values_dialog", False, type=bool)
+        if disable_attributes:
+            self.layer.addFeature(f)
+            self.layer.endEditCommand()
+        else:
+            dlg = self.iface.getFeatureForm(self.layer, f)
+            if dlg.exec_():
+                self.layer.endEditCommand()
+            else:
+                self.layer.destroyEditCommand()
 
 
     def editFeature(self, geom, fid):
@@ -246,7 +256,7 @@ class PenEditingTool(QgsMapTool):
                 if self.layerCRSSrsid != self.projectCRSSrsid:
                     geom.transform(QgsCoordinateTransform(self.layerCRSSrsid,self.projectCRSSrsid))
                 dist,atVertex = geom.closestVertexWithContext(point)
-                d = self.canvas.mapUnitsPerPixel() * 4
+                d = self.canvas.mapUnitsPerPixel() * 10
                 if math.sqrt(dist) < d:
                     geom.deleteVertex(atVertex)
                     self.editFeature(geom, featid)
