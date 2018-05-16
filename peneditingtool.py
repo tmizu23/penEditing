@@ -21,6 +21,8 @@ class PenEditingTool(QgsMapTool):
         self.lastpoint = None
         self.featid = None
         self.layer = False
+        self.alt = False
+        self.ctrl = False
         #our own fancy cursor
         self.cursor = QCursor(QPixmap(["16 16 3 1",
                                        "      c None",
@@ -42,6 +44,19 @@ class PenEditingTool(QgsMapTool):
                                        "    ++.....+    ",
                                        "      ++.++     ",
                                        "       +.+      "]))
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Alt:
+            self.alt = True
+        elif event.key() == Qt.Key_Control:
+            self.ctrl = True
+
+    def keyReleaseEvent(self, event):
+        if event.key() == Qt.Key_Alt:
+            self.alt = False
+        elif event.key() == Qt.Key_Control:
+            self.ctrl = False
+
 
     def distance(self,p1, p2):
         dx = p1[0] - p2[0]
@@ -177,7 +192,7 @@ class PenEditingTool(QgsMapTool):
 
         settings = QSettings()
         disable_attributes = settings.value("/qgis/digitizing/disable_enter_attribute_values_dialog", False, type=bool)
-        if disable_attributes:
+        if disable_attributes or feat is not None:
             self.layer.addFeature(f)
             self.layer.endEditCommand()
         else:
@@ -249,7 +264,17 @@ class PenEditingTool(QgsMapTool):
         if f is not None:
             featid = f.id()
             self.layer.select(featid)
-            if self.selected:
+            if self.ctrl:
+                # ctrlを押しながらダブルクリックで属性ポップアップ
+                layer.beginEditCommand("edit attribute")
+                dlg = self.iface.getFeatureForm(layer, f)
+                if dlg.exec_():
+                    layer.endEditCommand()
+                else:
+                    layer.destroyEditCommand()
+                self.ctrl = False
+                layer.removeSelection()
+            elif self.selected:
                 # 選択されていて頂点に近い場合は、頂点を削除
                 geom = QgsGeometry(f.geometry())
                 self.check_crs()
@@ -260,6 +285,7 @@ class PenEditingTool(QgsMapTool):
                 if math.sqrt(dist) < d:
                     geom.deleteVertex(atVertex)
                     self.editFeature(geom, featid)
+
 
     def check_selection(self):
         featid_list = self.layer.selectedFeaturesIds()
@@ -327,7 +353,6 @@ class PenEditingTool(QgsMapTool):
             self.rb.addPoint(pnt)
 
     def canvasReleaseEvent(self, event):
-
         # finish editing
         if self.state=="editing":
             if self.rb.numberOfVertices() > 2:
@@ -383,6 +408,8 @@ class PenEditingTool(QgsMapTool):
         self.startmarker = QgsVertexMarker(self.canvas)
         self.startmarker.setIconType(QgsVertexMarker.ICON_X)
         self.startmarker.hide()
+        self.alt = False
+        self.ctrl = False
 
     def deactivate(self):
         pass
