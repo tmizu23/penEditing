@@ -13,16 +13,14 @@ class PenEditingTool(QgsMapTool):
         QgsMapTool.__init__(self, canvas)
         self.canvas = canvas
         self.iface = iface
-        self.state = "free" #free,drawing,ploting
-        self.editing = False
+        self.state = "free" #free,drawing,editing
+        self.drawingstate = "plotting" #plotting,dragging
         self.selected = False
         self.rb = None
-        #self.startmarker = None
         self.startmarker = QgsVertexMarker(self.canvas)
         self.startmarker.setIconType(QgsVertexMarker.ICON_BOX)
         self.startmarker.hide()
         self.featid = None
-        self.layer = False
         self.alt = False
         self.ctrl = False
         #our own fancy cursor
@@ -53,17 +51,29 @@ class PenEditingTool(QgsMapTool):
         elif event.key() == Qt.Key_Control:
             self.ctrl = True
         elif event.key() == Qt.Key_Return:
-            if self.state=="ploting":
-                if self.editing:
-                    self.finish_editing()
-                else:
-                    self.finish_drawing()
+            if self.state=="drawing":
+                self.finish_drawing()
+            elif self.state=="editing":
+                self.finish_editing()
+
 
     def keyReleaseEvent(self, event):
         if event.key() == Qt.Key_Alt:
             self.alt = False
         elif event.key() == Qt.Key_Control:
             self.ctrl = False
+
+    # 補間
+    def interpolate(self, geom):
+        poly = geom.asPolyline()
+        x_interp = []
+        y_interp = []
+        for p0, p1 in zip(poly[:-1], poly[1:]):
+            x_interp.extend(np.linspace(p0[0], p1[0], 20))
+            y_interp.extend(np.linspace(p0[1], p1[1], 20))
+        poly_interp = [QgsPoint(x, y) for x, y in zip(x_interp, y_interp)]
+        geom_interp = QgsGeometry().fromPolyline(poly_interp)
+        return geom_interp
 
     #移動平均でスムージング
     def smoothing(self,geom):
@@ -80,12 +90,13 @@ class PenEditingTool(QgsMapTool):
         return geom_smooth
 
     def createFeature(self, geom, feat):
-        provider = self.layer.dataProvider()
+        layer = self.canvas.currentLayer()
+        provider = layer.dataProvider()
         #toleranceで指定したピクセル数以内のゆらぎをシンプルにする
         #simplifyの引数の単位は長さなので変換する
-        tolerance = self.get_tolerance()
-        d = self.canvas.mapUnitsPerPixel()
-        s = geom.simplify(tolerance*d)
+        # tolerance = self.get_tolerance()
+        # d = self.canvas.mapUnitsPerPixel()
+        # geom = geom.simplify(tolerance*d)
 
         self.check_crs()
         if self.layerCRSSrsid != self.projectCRSSrsid:
@@ -93,10 +104,10 @@ class PenEditingTool(QgsMapTool):
 
         # validate geometry
         f = QgsFeature()
-        f.setGeometry(s)
+        f.setGeometry(geom)
 
         # add attribute fields to feature
-        fields = self.layer.pendingFields()
+        fields = layer.pendingFields()
         f.initAttributes(fields.count())
 
         if feat is None:
@@ -107,46 +118,46 @@ class PenEditingTool(QgsMapTool):
             for i in range(fields.count()):
                     f.setAttribute(i, feat.attributes()[i])
 
-        self.layer.beginEditCommand("Feature added")
+        layer.beginEditCommand("Feature added")
 
         settings = QSettings()
         disable_attributes = settings.value("/qgis/digitizing/disable_enter_attribute_values_dialog", False, type=bool)
         if disable_attributes or feat is not None:
-            self.layer.addFeature(f)
-            self.layer.endEditCommand()
+            layer.addFeature(f)
+            layer.endEditCommand()
         else:
-            dlg = self.iface.getFeatureForm(self.layer, f)
+            dlg = self.iface.getFeatureForm(layer, f)
             if dlg.exec_():
-                self.layer.endEditCommand()
+                layer.endEditCommand()
             else:
-                self.layer.destroyEditCommand()
+                layer.destroyEditCommand()
 
 
     def editFeature(self, geom, f, hidedlg):
-
-        tolerance = self.get_tolerance()
-        d = self.canvas.mapUnitsPerPixel()
-        s = geom.simplify(tolerance*d)
+        layer = self.canvas.currentLayer()
+        # tolerance = self.get_tolerance()
+        # d = self.canvas.mapUnitsPerPixel()
+        # geom = geom.simplify(tolerance*d)
         self.check_crs()
         if self.layerCRSSrsid != self.projectCRSSrsid:
-            s.transform(QgsCoordinateTransform(self.projectCRSSrsid, self.layerCRSSrsid))
-        self.layer.beginEditCommand("Feature edited")
+            geom.transform(QgsCoordinateTransform(self.projectCRSSrsid, self.layerCRSSrsid))
+        layer.beginEditCommand("Feature edited")
         settings = QSettings()
         disable_attributes = settings.value("/qgis/digitizing/disable_enter_attribute_values_dialog", False, type=bool)
         if disable_attributes or hidedlg:
-            self.layer.changeGeometry(f.id(), s)
-            self.layer.endEditCommand()
+            layer.changeGeometry(f.id(), geom)
+            layer.endEditCommand()
         else:
-            dlg = self.iface.getFeatureForm(self.layer, f)
+            dlg = self.iface.getFeatureForm(layer, f)
             if dlg.exec_():
-                self.layer.changeGeometry(f.id(), s)
-                self.layer.endEditCommand()
+                layer.changeGeometry(f.id(), geom)
+                layer.endEditCommand()
             else:
-                self.layer.destroyEditCommand()
+                layer.destroyEditCommand()
 
 
-    def getFeatureById(self,featid):
-        features = [f for f in self.layer.getFeatures(QgsFeatureRequest().setFilterFids(featid))]
+    def getFeatureById(self,layer,featid):
+        features = [f for f in layer.getFeatures(QgsFeatureRequest().setFilterFids(featid))]
         if len(features) != 1:
             return None
         else:
@@ -155,16 +166,13 @@ class PenEditingTool(QgsMapTool):
     def closestPointOfGeometry(self,point,geom):
         #フィーチャとの距離が近いかどうかを確認
         near = False
-        self.check_crs()
-        if self.layerCRSSrsid != self.projectCRSSrsid:
-            geom.transform(QgsCoordinateTransform(self.layerCRSSrsid, self.projectCRSSrsid))
         (dist, minDistPoint, afterVertex)=geom.closestSegmentWithContext(point)
         d = self.canvas.mapUnitsPerPixel() * 10
         if math.sqrt(dist) < d:
             near = True
         return near,minDistPoint,afterVertex
 
-    def getNearFeature(self, point):
+    def getNearFeature(self, layer,point):
         d = self.canvas.mapUnitsPerPixel() * 4
         rect = QgsRectangle((point.x() - d), (point.y() - d), (point.x() + d), (point.y() + d))
         self.check_crs()
@@ -175,33 +183,61 @@ class PenEditingTool(QgsMapTool):
         request = QgsFeatureRequest()
         request.setLimit(1)
         request.setFilterRect(rect)
-        f = [feat for feat in self.layer.getFeatures(request)]  # only one because of setlimit(1)
+        f = [feat for feat in layer.getFeatures(request)]  # only one because of setlimit(1)
         if len(f)==0:
             return None
         else:
             return f[0]
 
-    def canvasDoubleClickEvent(self,event):
-        self.log("double")
-        self.log("{}".format(self.state))
-        #クリックイベントで設定されてしまうため戻す
-        if self.rb is not None:
-            self.state = "free"
-            self.rb.reset()
-            self.rb = None
-            self.startmarker.hide()
-            self.canvas.refresh()
+    def check_selection(self,layer):
+        featid_list = layer.selectedFeaturesIds()
+        if len(featid_list) > 0:
+            return True,featid_list
+        else:
+            return False,featid_list
 
+    def selectNearFeature(self,layer,pnt):
         #近い地物を選択
-        layer = self.canvas.currentLayer()
         layer.removeSelection()
-        point = self.toMapCoordinates(event.pos())
-        f = self.getNearFeature(point)
+        f = self.getNearFeature(layer,pnt)
         if f is not None:
             featid = f.id()
-            self.layer.select(featid)
-            if self.ctrl:
-                # ctrlを押しながらダブルクリックで属性ポップアップ
+            layer.select(featid)
+
+
+    def canvasPressEvent(self, event):
+        self.log("press")
+        layer = self.canvas.currentLayer()
+        if not layer:
+            return
+        button_type = event.button()
+
+        pnt = self.toMapCoordinates(event.pos())
+        self.selected, featids = self.check_selection(layer)
+        near = False
+        if self.state=="free":
+            #選択されている地物と交差するポイントを取得
+            if self.selected:
+                f = self.getFeatureById(layer,[featids[0]])
+                geom = QgsGeometry(f.geometry())
+                self.check_crs()
+                if self.layerCRSSrsid != self.projectCRSSrsid:
+                    geom.transform(QgsCoordinateTransform(self.layerCRSSrsid, self.projectCRSSrsid))
+                near,minDistPoint,afterVertex = self.closestPointOfGeometry(pnt,geom)
+        elif self.state=="drawing" or self.state=="editing":
+            #作成中のrbのラインに近いか
+            geom = self.rb.asGeometry()
+            near, minDistPoint, afterVertex = self.closestPointOfGeometry(pnt,geom)
+
+        if button_type==2:
+            #新規の確定
+            if self.state=="drawing":
+                self.finish_drawing()
+            #編集の確定
+            elif self.state=="editing":
+                self.finish_editing()
+            # ctrlを押しながらで属性ポップアップ
+            elif self.state == "free" and self.ctrl and  near:
                 layer.beginEditCommand("edit attribute")
                 dlg = self.iface.getFeatureForm(layer, f)
                 if dlg.exec_():
@@ -210,64 +246,35 @@ class PenEditingTool(QgsMapTool):
                     layer.destroyEditCommand()
                 self.ctrl = False
                 layer.removeSelection()
-
-    def check_selection(self):
-        featid_list = self.layer.selectedFeaturesIds()
-        if len(featid_list) > 0:
-            return True,featid_list
-        else:
-            return False,featid_list
-
-    def canvasPressEvent(self, event):
-        self.log("press")
-        self.layer = self.canvas.currentLayer()
-        if not self.layer:
-            return
-        button_type = event.button()
-
-        pnt = self.toMapCoordinates(event.pos())
-        self.selected, featids = self.check_selection()
-        near = False
-        if self.selected:
-            f = self.getFeatureById([featids[0]])
-            geom = QgsGeometry(f.geometry())
-            near,minDistPoint,afterVertex = self.closestPointOfGeometry(pnt,geom)
-        elif self.rb is not None:
-            #rbのラインに近いか
-            geom = self.rb.asGeometry()
-            near, minDistPoint, afterVertex = self.closestPointOfGeometry(pnt,geom)
-        if button_type==2:
-            #確定
-            if self.state=="ploting":
-                if self.editing:
-                    self.finish_editing()
-                else:
-                    self.finish_drawing()
-            #切断（選択地物）
-            if self.state=="free" and near:
-                self.check_crs()
-                if self.layerCRSSrsid != self.projectCRSSrsid:
-                    geom.transform(QgsCoordinateTransform(self.layerCRSSrsid, self.projectCRSSrsid))
-                polyline=geom.asPolyline()
-                line1=polyline[0:afterVertex]
+            # altを押しながらで切断（選択地物）
+            elif self.state == "free" and self.alt and near:
+                polyline = geom.asPolyline()
+                line1 = polyline[0:afterVertex]
                 line1.append(minDistPoint)
                 line2 = polyline[afterVertex:]
-                line2.insert(0,minDistPoint)
+                line2.insert(0, minDistPoint)
                 self.createFeature(QgsGeometry.fromPolyline(line2), f)
-                self.editFeature(QgsGeometry.fromPolyline(line1),f,True)
+                self.editFeature(QgsGeometry.fromPolyline(line1), f, True)
                 self.canvas.currentLayer().removeSelection()
+            # 近い地物を選択
+            elif self.state=="free":
+                self.selectNearFeature(layer, pnt)
+
+
         elif button_type == 1:
             # 編集開始（選択地物）
             #　rbに変換して、編集処理。geomは一旦削除
             if self.state=="free" and near:
-                self.layer.removeSelection()
+                layer.removeSelection()
+                geom = self.interpolate(geom)
+                near, minDistPoint, afterVertex = self.closestPointOfGeometry(pnt, geom)
                 polyline = geom.asPolyline()
                 del polyline[afterVertex:]
                 self.set_rb()
                 self.setRubberBandPoints(polyline, self.rb)
                 self.rb.addPoint(pnt)
-                self.state = "drawing"
-                self.editing =True
+                self.state = "editing"
+                self.drawingstate = "dragging"
                 self.drawingpoints = []
                 self.drawingidx = self.rb.numberOfVertices() - 1
                 self.featid = featids[0]
@@ -277,59 +284,66 @@ class PenEditingTool(QgsMapTool):
                 self.rb.addPoint(pnt) #最初のポイントは同じ点が2つ追加される仕様？
                 self.startmarker.setCenter(pnt)
                 self.startmarker.show()
-                self.state = "drawing"
+                self.state="drawing"
+                self.drawingstate = "dragging"
                 self.drawingpoints =[]
                 self.drawingidx = 0
             # 編集開始（未確定地物）
-            elif self.state == "ploting" and near:
+            elif (self.state == "drawing" or self.state == "editing") and near:
                 rbgeom = self.rb.asGeometry()
+                rbgeom = self.interpolate(rbgeom)
+                near, minDistPoint, afterVertex = self.closestPointOfGeometry(pnt, rbgeom)
                 rbline = rbgeom.asPolyline()
                 del rbline[afterVertex:]
                 self.setRubberBandPoints(rbline, self.rb)
                 self.rb.addPoint(pnt)
-                self.state = "drawing"
+                self.drawingstate = "dragging"
                 self.drawingpoints = []
                 self.drawingidx = self.rb.numberOfVertices() - 1
             # プロット
-            elif self.state == "ploting":
+            elif (self.state == "drawing" or self.state == "editing"):
                 pnt = self.toMapCoordinates(event.pos())
                 self.rb.addPoint(pnt)
-                self.state = "drawing"
+                self.drawingstate = "dragging"
                 self.drawingpoints = []
                 self.drawingidx = self.rb.numberOfVertices()-1
 
     def canvasMoveEvent(self, event):
-        self.layer = self.canvas.currentLayer()
-        if not self.layer:
+        layer = self.canvas.currentLayer()
+        if not layer:
             return
         pnt = self.toMapCoordinates(event.pos())
         #作成中、編集中
-        if self.state=="drawing":
+        if (self.state=="drawing" or self.state == "editing") and self.drawingstate=="dragging":
             self.rb.addPoint(pnt)
             self.drawingpoints.append(pnt)
 
     def canvasReleaseEvent(self, event):
         # ドロー終了
-        if self.state == "drawing":
+        if (self.state == "drawing" or self.state == "editing") and self.drawingstate == "dragging":
             #スムーズ処理してrbを付け替える
             if len(self.drawingpoints) > 0:
                 rbgeom = self.rb.asGeometry()
                 rbline = rbgeom.asPolyline()
                 #前の部分の一部にドロー部分加えてスムーズ処理
-                if self.ctrl and self.drawingidx >= 8:
+                if self.drawingidx >= 8:
                     points = rbline[self.drawingidx - 7:self.drawingidx + 1] + self.drawingpoints
                 else:
                     points = self.drawingpoints
-                #self.log("{}".format(points))
                 geom = QgsGeometry().fromPolyline(points)
                 geom = self.smoothing(geom)
                 drawline = geom.asPolyline()
-                if self.ctrl and self.drawingidx >= 8:
+                if self.drawingidx >= 8:
                     rbline[self.drawingidx - 7:] = drawline
                 else:
                     rbline[self.drawingidx + 1:] = drawline
+                geom = QgsGeometry().fromPolyline(rbline)
+                tolerance = self.get_tolerance()
+                d = self.canvas.mapUnitsPerPixel()
+                geom = geom.simplify(tolerance * d)
+                rbline = geom.asPolyline()
                 self.setRubberBandPoints(rbline,self.rb)
-            self.state = "ploting"
+            self.drawingstate = "plotting"
 
     def setRubberBandPoints(self, points, rb):
         # 最後に更新
@@ -339,12 +353,12 @@ class PenEditingTool(QgsMapTool):
             rb.addPoint(point, update)
 
     def finish_editing(self):
+        layer = self.canvas.currentLayer()
         if self.rb.numberOfVertices() > 1:
             geom = self.rb.asGeometry()
-            f = self.getFeatureById([self.featid])
+            f = self.getFeatureById(layer,[self.featid])
             self.editFeature(geom, f,False)
         # reset rubberband and refresh the canvas
-        self.editing = False
         self.state = "free"
         self.rb.reset()
         self.rb = None
@@ -352,14 +366,7 @@ class PenEditingTool(QgsMapTool):
         self.canvas.refresh()
 
     def finish_drawing(self):
-        #ダブルクリックのときも、一旦、シングルクリックの処理が実行され
-        # stateがdrawingになっているので、vertex_Nで処理を実行しないようにする
-        # plotingの時は、2点でもラインを引きたい
-        if self.state == "ploting":
-            vertex_N = 1
-        else:
-            vertex_N = 2
-        if self.rb.numberOfVertices() > vertex_N:
+        if self.rb.numberOfVertices() > 1:
             geom = self.rb.asGeometry()
             self.createFeature(geom, None)
 
@@ -376,8 +383,9 @@ class PenEditingTool(QgsMapTool):
         self.rb.setWidth(2)
 
     def check_crs(self):
+        layer = self.canvas.currentLayer()
         renderer = self.canvas.mapSettings()
-        self.layerCRSSrsid = self.layer.crs().srsid()
+        self.layerCRSSrsid = layer.crs().srsid()
         self.projectCRSSrsid = renderer.destinationCrs().srsid()
 
     def get_tolerance(self):
@@ -391,7 +399,6 @@ class PenEditingTool(QgsMapTool):
 
     def activate(self):
         self.canvas.setCursor(self.cursor)
-        self.layer = self.canvas.currentLayer()
         self.alt = False
         self.ctrl = False
 
