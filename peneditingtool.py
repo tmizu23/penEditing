@@ -15,8 +15,9 @@ class PenEditingTool(QgsMapTool):
         self.iface = iface
         self.state = "free" #free,drawing,editing
         self.drawingstate = "plotting" #plotting,dragging
-        self.selected = False
         self.rb = None
+        self.edit_rb = None
+        self.modify = False
         self.startmarker = QgsVertexMarker(self.canvas)
         self.startmarker.setIconType(QgsVertexMarker.ICON_BOX)
         self.startmarker.hide()
@@ -89,14 +90,72 @@ class PenEditingTool(QgsMapTool):
         geom_smooth = QgsGeometry().fromPolyline(poly_smooth)
         return geom_smooth
 
+    def distance(self,p1, p2):
+        dx = p1[0] - p2[0]
+        dy = p1[1] - p2[1]
+        return math.sqrt(dx * dx + dy * dy)
+
+    def modify_obj(self, rbgeom, editedgeom):
+        drawgeom = QgsGeometry(rbgeom)
+        drawline = drawgeom.asPolyline()
+
+        startpnt = drawline[0]
+        lastpnt = drawline[-1]
+
+        editedline = editedgeom.asPolyline()
+        _, near_startpnt, startidx = self.closestPointOfGeometry(startpnt, editedgeom)
+        near, near_lastpnt, lastidx = self.closestPointOfGeometry(lastpnt, editedgeom)
+        startpnt_is_nearest_to_edited_start = self.distance(near_startpnt, editedline[startidx - 1]) < self.distance(
+            near_lastpnt,
+            editedline[startidx - 1])
+
+        # 半分以上から始まり始点で終わる場合
+        is_closeline_forward = (startidx >= len(editedline) / 2 and lastidx == 1 and len(editedline) > 2)
+        is_closeline_reward = (
+        startidx <= len(editedline) / 2 and lastidx == len(editedline) - 1 and len(editedline) > 2)
+
+        # 部分の修正なので終点も修正オブジェクトの近くで終わっている。ただし、ポリゴンを閉じるような修正はのぞく
+        if near and not is_closeline_forward and not is_closeline_reward:
+            # drawlineとeditedlineの向きが順方向の場合.
+            # startidxが最終vertex上でlastidxが最終vertexを超える場合.2頂点内の修正で、startpntの方がeditedlineの最初のポイントに近い場合
+            if (lastidx >= startidx and len(editedline) > 2) or (
+                    startidx == lastidx and startpnt_is_nearest_to_edited_start):
+                geom = QgsGeometry.fromPolyline(
+                    editedline[startidx - 7:startidx+1] + drawline + editedline[lastidx+1:lastidx + 9])
+                drawgeom = self.smoothing(geom)
+                drawline = drawgeom.asPolyline()
+                editedline[startidx - 7:lastidx + 9] = drawline
+
+            # drawlineとeditedlineの向きが逆の場合.上記以外
+            else:
+                starttmp = editedline[startidx+1:startidx + 9]
+                starttmp.reverse()
+                lasttmp = editedline[lastidx - 7:lastidx+1]
+                lasttmp.reverse()
+                geom = QgsGeometry.fromPolyline(starttmp + drawline + lasttmp)
+                drawgeom = self.smoothing(geom)
+                drawline = drawgeom.asPolyline()
+                editedline[lastidx - 7:startidx + 9]=drawline
+
+        # 終点は離れている.もしくはポリゴンを閉じるような場合
+        else:
+            drawline = drawgeom.asPolyline()
+            drawgeom = QgsGeometry.fromPolyline(editedline[startidx - 7:startidx + 1] + drawline)
+            drawgeom = self.smoothing(drawgeom)
+            drawline = drawgeom.asPolyline()
+            editedline[startidx - 7:] = drawline
+
+        geom = QgsGeometry().fromPolyline(editedline)
+        tolerance = self.get_tolerance()
+        d = self.canvas.mapUnitsPerPixel()
+        geom = geom.simplify(tolerance * d)
+        rbline = geom.asPolyline()
+        self.setRubberBandPoints(rbline, self.rb)
+
+
     def createFeature(self, geom, feat):
         layer = self.canvas.currentLayer()
         provider = layer.dataProvider()
-        #toleranceで指定したピクセル数以内のゆらぎをシンプルにする
-        #simplifyの引数の単位は長さなので変換する
-        # tolerance = self.get_tolerance()
-        # d = self.canvas.mapUnitsPerPixel()
-        # geom = geom.simplify(tolerance*d)
 
         self.check_crs()
         if self.layerCRSSrsid != self.projectCRSSrsid:
@@ -135,9 +194,6 @@ class PenEditingTool(QgsMapTool):
 
     def editFeature(self, geom, f, hidedlg):
         layer = self.canvas.currentLayer()
-        # tolerance = self.get_tolerance()
-        # d = self.canvas.mapUnitsPerPixel()
-        # geom = geom.simplify(tolerance*d)
         self.check_crs()
         if self.layerCRSSrsid != self.projectCRSSrsid:
             geom.transform(QgsCoordinateTransform(self.projectCRSSrsid, self.layerCRSSrsid))
@@ -185,9 +241,9 @@ class PenEditingTool(QgsMapTool):
         request.setFilterRect(rect)
         f = [feat for feat in layer.getFeatures(request)]  # only one because of setlimit(1)
         if len(f)==0:
-            return None
+            return False,None
         else:
-            return f[0]
+            return True,f[0]
 
     def check_selection(self,layer):
         featid_list = layer.selectedFeaturesIds()
@@ -199,11 +255,21 @@ class PenEditingTool(QgsMapTool):
     def selectNearFeature(self,layer,pnt):
         #近い地物を選択
         layer.removeSelection()
-        f = self.getNearFeature(layer,pnt)
-        if f is not None:
+        near, f = self.getNearFeature(layer,pnt)
+        if near:
             featid = f.id()
             layer.select(featid)
+            return True,f
+        else:
+            return False,None
 
+    def getSelectedNearFeature(self,layer,pnt):
+        selected, featids = self.check_selection(layer)
+        near, f = self.getNearFeature(layer,pnt)
+        if selected and near and featids[0]==f.id():
+            return True,f
+        else:
+            return False,None
 
     def canvasPressEvent(self, event):
         self.log("press")
@@ -211,24 +277,8 @@ class PenEditingTool(QgsMapTool):
         if not layer:
             return
         button_type = event.button()
-
         pnt = self.toMapCoordinates(event.pos())
-        self.selected, featids = self.check_selection(layer)
-        near = False
-        if self.state=="free":
-            #選択されている地物と交差するポイントを取得
-            if self.selected:
-                f = self.getFeatureById(layer,[featids[0]])
-                geom = QgsGeometry(f.geometry())
-                self.check_crs()
-                if self.layerCRSSrsid != self.projectCRSSrsid:
-                    geom.transform(QgsCoordinateTransform(self.layerCRSSrsid, self.projectCRSSrsid))
-                near,minDistPoint,afterVertex = self.closestPointOfGeometry(pnt,geom)
-        elif self.state=="drawing" or self.state=="editing":
-            #作成中のrbのラインに近いか
-            geom = self.rb.asGeometry()
-            near, minDistPoint, afterVertex = self.closestPointOfGeometry(pnt,geom)
-
+        #右クリック
         if button_type==2:
             #新規の確定
             if self.state=="drawing":
@@ -236,77 +286,96 @@ class PenEditingTool(QgsMapTool):
             #編集の確定
             elif self.state=="editing":
                 self.finish_editing()
-            # ctrlを押しながらで属性ポップアップ
-            elif self.state == "free" and self.ctrl and  near:
-                layer.beginEditCommand("edit attribute")
-                dlg = self.iface.getFeatureForm(layer, f)
-                if dlg.exec_():
-                    layer.endEditCommand()
-                else:
-                    layer.destroyEditCommand()
-                self.ctrl = False
-                layer.removeSelection()
-            # altを押しながらで切断（選択地物）
-            elif self.state == "free" and self.alt and near:
-                polyline = geom.asPolyline()
-                line1 = polyline[0:afterVertex]
-                line1.append(minDistPoint)
-                line2 = polyline[afterVertex:]
-                line2.insert(0, minDistPoint)
-                self.createFeature(QgsGeometry.fromPolyline(line2), f)
-                self.editFeature(QgsGeometry.fromPolyline(line1), f, True)
-                self.canvas.currentLayer().removeSelection()
             # 近い地物を選択
             elif self.state=="free":
-                self.selectNearFeature(layer, pnt)
-
-
+                selected,f = self.selectNearFeature(layer, pnt)
+                # ctrlを押しながらで属性ポップアップ
+                if self.ctrl and  selected:
+                    layer.beginEditCommand("edit attribute")
+                    dlg = self.iface.getFeatureForm(layer, f)
+                    if dlg.exec_():
+                        layer.endEditCommand()
+                    else:
+                        layer.destroyEditCommand()
+                    self.ctrl = False
+                    layer.removeSelection()
+                # altを押しながらで切断（選択地物）
+                elif self.alt and selected:
+                    geom = QgsGeometry(f.geometry())
+                    self.check_crs()
+                    if self.layerCRSSrsid != self.projectCRSSrsid:
+                        geom.transform(QgsCoordinateTransform(self.layerCRSSrsid, self.projectCRSSrsid))
+                    near, minDistPoint, afterVertex = self.closestPointOfGeometry(pnt, geom)
+                    polyline = geom.asPolyline()
+                    line1 = polyline[0:afterVertex]
+                    line1.append(minDistPoint)
+                    line2 = polyline[afterVertex:]
+                    line2.insert(0, minDistPoint)
+                    self.createFeature(QgsGeometry.fromPolyline(line2), f)
+                    self.editFeature(QgsGeometry.fromPolyline(line1), f, True)
+                    self.canvas.currentLayer().removeSelection()
+        #左クリック
         elif button_type == 1:
-            # 編集開始（選択地物）
-            #　rbに変換して、編集処理。geomは一旦削除
-            if self.state=="free" and near:
-                layer.removeSelection()
-                geom = self.interpolate(geom)
-                near, minDistPoint, afterVertex = self.closestPointOfGeometry(pnt, geom)
-                polyline = geom.asPolyline()
-                del polyline[afterVertex:]
-                self.set_rb()
-                self.setRubberBandPoints(polyline, self.rb)
-                self.rb.addPoint(pnt)
-                self.state = "editing"
-                self.drawingstate = "dragging"
-                self.drawingpoints = []
-                self.drawingidx = self.rb.numberOfVertices() - 1
-                self.featid = featids[0]
-            # 新規開始
-            elif self.state == "free":
-                self.set_rb()
-                self.rb.addPoint(pnt) #最初のポイントは同じ点が2つ追加される仕様？
-                self.startmarker.setCenter(pnt)
-                self.startmarker.show()
-                self.state="drawing"
-                self.drawingstate = "dragging"
-                self.drawingpoints =[]
-                self.drawingidx = 0
-            # 編集開始（未確定地物）
-            elif (self.state == "drawing" or self.state == "editing") and near:
-                rbgeom = self.rb.asGeometry()
-                rbgeom = self.interpolate(rbgeom)
-                near, minDistPoint, afterVertex = self.closestPointOfGeometry(pnt, rbgeom)
-                rbline = rbgeom.asPolyline()
-                del rbline[afterVertex:]
-                self.setRubberBandPoints(rbline, self.rb)
-                self.rb.addPoint(pnt)
-                self.drawingstate = "dragging"
-                self.drawingpoints = []
-                self.drawingidx = self.rb.numberOfVertices() - 1
-            # プロット
+            if self.state=="free":
+
+                near, f = self.getSelectedNearFeature(layer,pnt)
+
+                # 編集開始（選択地物）
+                if near:
+                    #  rbに変換して、編集処理
+                    layer.removeSelection()
+                    geom = QgsGeometry(f.geometry())
+                    self.check_crs()
+                    if self.layerCRSSrsid != self.projectCRSSrsid:
+                        geom.transform(QgsCoordinateTransform(self.layerCRSSrsid, self.projectCRSSrsid))
+                    geom = self.interpolate(geom)
+                    polyline = geom.asPolyline()
+                    self.set_rb()
+                    self.setRubberBandPoints(polyline, self.rb)
+                    self.set_edit_rb()
+                    self.edit_rb.addPoint(pnt)
+                    self.state = "editing"
+                    self.drawingstate = "dragging"
+                    self.drawingpoints = []
+                    self.drawingidx = self.rb.numberOfVertices() - 1
+                    self.featid = f.id()
+                    self.modify = True
+                # 新規開始
+                else:
+                    self.set_rb()
+                    self.rb.addPoint(pnt) #最初のポイントは同じ点が2つ追加される仕様？
+                    self.startmarker.setCenter(pnt)
+                    self.startmarker.show()
+                    self.state="drawing"
+                    self.drawingstate = "dragging"
+                    self.drawingpoints =[]
+                    self.drawingidx = 0
             elif (self.state == "drawing" or self.state == "editing"):
-                pnt = self.toMapCoordinates(event.pos())
-                self.rb.addPoint(pnt)
-                self.drawingstate = "dragging"
-                self.drawingpoints = []
-                self.drawingidx = self.rb.numberOfVertices()-1
+                # 作成中のrbのラインに近いか
+                geom = self.rb.asGeometry()
+                near, minDistPoint, afterVertex = self.closestPointOfGeometry(pnt, geom)
+                # 編集開始（未確定地物）
+                if near and not self.modify:
+                    rbgeom = self.rb.asGeometry()
+                    rbgeom = self.interpolate(rbgeom)
+                    rbline = rbgeom.asPolyline()
+                    self.setRubberBandPoints(rbline, self.rb)
+                    self.set_edit_rb()
+                    self.edit_rb.addPoint(pnt)
+                    self.drawingstate = "dragging"
+                    self.drawingpoints = []
+                    self.drawingidx = self.rb.numberOfVertices() - 1
+                    self.modify = True
+                # プロット
+                else:
+                    pnt = self.toMapCoordinates(event.pos())
+                    if self.modify:
+                        self.edit_rb.addPoint(pnt)
+                    else:
+                        self.rb.addPoint(pnt)
+                    self.drawingstate = "dragging"
+                    self.drawingpoints = []
+                    self.drawingidx = self.rb.numberOfVertices()-1
 
     def canvasMoveEvent(self, event):
         layer = self.canvas.currentLayer()
@@ -315,35 +384,40 @@ class PenEditingTool(QgsMapTool):
         pnt = self.toMapCoordinates(event.pos())
         #作成中、編集中
         if (self.state=="drawing" or self.state == "editing") and self.drawingstate=="dragging":
-            self.rb.addPoint(pnt)
+            if self.modify:
+                self.edit_rb.addPoint(pnt)
+            else:
+                self.rb.addPoint(pnt)
             self.drawingpoints.append(pnt)
 
     def canvasReleaseEvent(self, event):
         # ドロー終了
         if (self.state == "drawing" or self.state == "editing") and self.drawingstate == "dragging":
-            #スムーズ処理してrbを付け替える
-            if len(self.drawingpoints) > 0:
-                rbgeom = self.rb.asGeometry()
-                rbline = rbgeom.asPolyline()
-                #前の部分の一部にドロー部分加えてスムーズ処理
-                if self.drawingidx >= 8:
-                    points = rbline[self.drawingidx - 7:self.drawingidx + 1] + self.drawingpoints
-                else:
+            if self.modify:
+                editedgeom = self.rb.asGeometry()
+                rbgeom = self.edit_rb.asGeometry()
+                self.modify_obj(rbgeom, editedgeom)
+                self.modify = False
+                self.edit_rb.reset()
+                self.edit_rb = None
+            else:
+                #スムーズ処理してrbを付け替える
+                if len(self.drawingpoints) > 0:
+                    rbgeom = self.rb.asGeometry()
+                    rbline = rbgeom.asPolyline()
                     points = self.drawingpoints
-                geom = QgsGeometry().fromPolyline(points)
-                geom = self.smoothing(geom)
-                drawline = geom.asPolyline()
-                if self.drawingidx >= 8:
-                    rbline[self.drawingidx - 7:] = drawline
-                else:
+                    geom = QgsGeometry().fromPolyline(points)
+                    geom = self.smoothing(geom)
+                    drawline = geom.asPolyline()
                     rbline[self.drawingidx + 1:] = drawline
-                geom = QgsGeometry().fromPolyline(rbline)
-                tolerance = self.get_tolerance()
-                d = self.canvas.mapUnitsPerPixel()
-                geom = geom.simplify(tolerance * d)
-                rbline = geom.asPolyline()
-                self.setRubberBandPoints(rbline,self.rb)
+                    geom = QgsGeometry().fromPolyline(rbline)
+                    tolerance = self.get_tolerance()
+                    d = self.canvas.mapUnitsPerPixel()
+                    geom = geom.simplify(tolerance * d)
+                    rbline = geom.asPolyline()
+                    self.setRubberBandPoints(rbline,self.rb)
             self.drawingstate = "plotting"
+
 
     def setRubberBandPoints(self, points, rb):
         # 最後に更新
@@ -381,6 +455,11 @@ class PenEditingTool(QgsMapTool):
         self.rb = QgsRubberBand(self.canvas)
         self.rb.setColor(QColor(255, 0, 0, 150))
         self.rb.setWidth(2)
+
+    def set_edit_rb(self):
+        self.edit_rb = QgsRubberBand(self.canvas)
+        self.edit_rb.setColor(QColor(255, 255, 0, 150))
+        self.edit_rb.setWidth(2)
 
     def check_crs(self):
         layer = self.canvas.currentLayer()
