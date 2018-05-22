@@ -12,9 +12,9 @@ This is QGIS plugin for editing freehand using a pen.
 
 ## 修正
 - 右クリックで選択
-- 選択状態で Ctrl + 右クリックで属性修正
+- 選択状態で なぞると修正
+- 選択状態で 右クリックで属性修正
 - 選択状態で Alt + 右クリックで切断
-- 選択状態でなぞると修正
 
 
 
