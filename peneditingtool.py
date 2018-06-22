@@ -23,7 +23,6 @@ class PenEditingTool(QgsMapTool):
         self.startmarker.hide()
         self.featid = None
         self.alt = False
-        self.ctrl = False
         #our own fancy cursor
         self.cursor = QCursor(QPixmap(["16 16 3 1",
                                        "      c None",
@@ -49,20 +48,17 @@ class PenEditingTool(QgsMapTool):
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Alt:
             self.alt = True
-        elif event.key() == Qt.Key_Control:
-            self.ctrl = True
-        elif event.key() == Qt.Key_Return:
-            if self.state=="drawing":
-                self.finish_drawing()
-            elif self.state=="editing":
-                self.finish_editing()
+        # elif event.key() == Qt.Key_Return:
+        #     if self.state=="drawing":
+        #         self.finish_drawing()
+        #     elif self.state=="editing":
+        #         self.finish_editing()
 
 
     def keyReleaseEvent(self, event):
         if event.key() == Qt.Key_Alt:
             self.alt = False
-        elif event.key() == Qt.Key_Control:
-            self.ctrl = False
+
 
     # 補間
     def interpolate(self, geom):
@@ -144,6 +140,7 @@ class PenEditingTool(QgsMapTool):
 
 
     def createFeature(self, geom, feat):
+        continueFlag = False
         layer = self.canvas.currentLayer()
         provider = layer.dataProvider()
 
@@ -180,6 +177,11 @@ class PenEditingTool(QgsMapTool):
                 layer.endEditCommand()
             else:
                 layer.destroyEditCommand()
+                reply = QMessageBox.question(None, "Question", "continue?", QMessageBox.Yes,
+                                             QMessageBox.No)
+                if reply == QMessageBox.Yes:
+                    continueFlag = True
+            return continueFlag
 
 
     def editFeature(self, geom, f, hidedlg):
@@ -301,7 +303,6 @@ class PenEditingTool(QgsMapTool):
                         layer.endEditCommand()
                     else:
                         layer.destroyEditCommand()
-                    self.ctrl = False
                     layer.removeSelection()
                 #選択
                 else:
@@ -423,14 +424,14 @@ class PenEditingTool(QgsMapTool):
     def finish_drawing(self):
         if self.rb.numberOfVertices() > 1:
             geom = self.rb.asGeometry()
-            self.createFeature(geom, None)
-
-        # reset rubberband and refresh the canvas
-        self.state = "free"
-        self.rb.reset()
-        self.rb = None
-        self.startmarker.hide()
-        self.canvas.refresh()
+            continueFlag = self.createFeature(geom, None)
+        if continueFlag == False:
+            # reset rubberband and refresh the canvas
+            self.state = "free"
+            self.rb.reset()
+            self.rb = None
+            self.startmarker.hide()
+            self.canvas.refresh()
 
     def set_rb(self):
         self.rb = QgsRubberBand(self.canvas)
@@ -460,7 +461,6 @@ class PenEditingTool(QgsMapTool):
     def activate(self):
         self.canvas.setCursor(self.cursor)
         self.alt = False
-        self.ctrl = False
 
     def deactivate(self):
         pass
