@@ -23,6 +23,7 @@ class PenEditingTool(QgsMapTool):
         self.startmarker.hide()
         self.featid = None
         self.alt = False
+        self.drawingline = []
         #our own fancy cursor
         self.cursor = QCursor(QPixmap(["16 16 3 1",
                                        "      c None",
@@ -267,6 +268,8 @@ class PenEditingTool(QgsMapTool):
         layer = self.canvas.currentLayer()
         if not layer:
             return
+        if layer.geometryType() != QGis.Line:
+            return
         button_type = event.button()
         pnt = self.toMapCoordinates(event.pos())
         #右クリック
@@ -367,6 +370,8 @@ class PenEditingTool(QgsMapTool):
         layer = self.canvas.currentLayer()
         if not layer:
             return
+        if layer.geometryType() != QGis.Line:
+            return
         pnt = self.toMapCoordinates(event.pos())
         #作成中、編集中
         if (self.state=="drawing" or self.state == "editing") and self.drawingstate=="dragging":
@@ -413,7 +418,8 @@ class PenEditingTool(QgsMapTool):
         if self.rb.numberOfVertices() > 1:
             geom = self.rb.asGeometry()
             f = self.getFeatureById(layer,[self.featid])
-            self.editFeature(geom, f,False)
+            if f is not None:
+                self.editFeature(geom, f,False)
         # reset rubberband and refresh the canvas
         self.state = "free"
         self.rb.reset()
@@ -434,12 +440,12 @@ class PenEditingTool(QgsMapTool):
             self.canvas.refresh()
 
     def set_rb(self):
-        self.rb = QgsRubberBand(self.canvas)
+        self.rb = QgsRubberBand(self.canvas, QGis.Line)
         self.rb.setColor(QColor(255, 0, 0, 150))
         self.rb.setWidth(2)
 
     def set_edit_rb(self):
-        self.edit_rb = QgsRubberBand(self.canvas)
+        self.edit_rb = QgsRubberBand(self.canvas, QGis.Line)
         self.edit_rb.setColor(QColor(255, 255, 0, 150))
         self.edit_rb.setWidth(2)
 

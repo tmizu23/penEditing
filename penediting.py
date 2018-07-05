@@ -73,8 +73,7 @@ class PenEditing:
             return
 
         #Decide whether the plugin button/menu is enabled or disabled
-        if (layer.isEditable() and (layer.geometryType() == QGis.Line or
-                                    layer.geometryType() == QGis.Polygon)):
+        if (layer.isEditable() and layer.geometryType() == QGis.Line):
             self.pen_edit.setEnabled(True)
             self.spinBoxAction.setEnabled(True)
             try:  # remove any existing connection first
