@@ -355,13 +355,16 @@ class PenEditingTool(QgsMapTool):
                     self.edit_rb.addPoint(pnt)
                     self.drawingstate = "dragging"
                     self.modify = True
+                    self.log("a")
                 # プロット
                 else:
                     pnt = self.toMapCoordinates(event.pos())
                     if self.modify:
                         self.edit_rb.addPoint(pnt)
+                        self.log("b")
                     else:
                         self.rb.addPoint(pnt)
+                        self.log("c")
                     self.drawingstate = "dragging"
                     self.drawingline = []
                     self.drawingidx = self.rb.numberOfVertices()-1
@@ -384,13 +387,22 @@ class PenEditingTool(QgsMapTool):
     def canvasReleaseEvent(self, event):
         # ドロー終了
         if (self.state == "drawing" or self.state == "editing") and self.drawingstate == "dragging":
+
             if self.modify:
-                editedgeom = self.rb.asGeometry()
-                rbgeom = self.edit_rb.asGeometry()
-                self.modify_obj(rbgeom, editedgeom)
-                self.modify = False
-                self.edit_rb.reset()
-                self.edit_rb = None
+                #線上にプロットする場合。一旦、modifyになっているので、プロットならプロット処理をする
+                if self.edit_rb.numberOfVertices() == 2:
+                    pnt = self.toMapCoordinates(event.pos())
+                    self.rb.addPoint(pnt)
+                    self.modify = False
+                    self.log("g")
+                else:
+                    editedgeom = self.rb.asGeometry()
+                    rbgeom = self.edit_rb.asGeometry()
+                    self.modify_obj(rbgeom, editedgeom)
+                    self.modify = False
+                    self.edit_rb.reset()
+                    self.edit_rb = None
+                    self.log("d")
             else:
                 #スムーズ処理してrbを付け替える
                 if len(self.drawingline) > 0:
@@ -402,6 +414,9 @@ class PenEditingTool(QgsMapTool):
                     d = self.canvas.mapUnitsPerPixel()
                     geom = geom.simplify(tolerance * d)
                     self.setRubberBandGeom(geom,self.rb)
+                    self.log("e")
+                else:
+                    self.log("f")
             self.drawingstate = "plotting"
 
 
@@ -422,6 +437,7 @@ class PenEditingTool(QgsMapTool):
                 self.editFeature(geom, f,False)
         # reset rubberband and refresh the canvas
         self.state = "free"
+        self.modify = False
         self.rb.reset()
         self.rb = None
         self.startmarker.hide()
@@ -434,6 +450,7 @@ class PenEditingTool(QgsMapTool):
         if continueFlag == False:
             # reset rubberband and refresh the canvas
             self.state = "free"
+            self.modify = False
             self.rb.reset()
             self.rb = None
             self.startmarker.hide()
