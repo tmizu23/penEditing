@@ -13,8 +13,7 @@ class PenEditingTool(QgsMapTool):
         QgsMapTool.__init__(self, canvas)
         self.canvas = canvas
         self.iface = iface
-        self.state = "free" #free,drawing,editing
-        self.drawingstate = "plotting" #plotting,dragging
+        self.state = "free" #free,dragging,plotting,editing
         self.rb = None
         self.edit_rb = None
         self.modify = False
@@ -275,10 +274,11 @@ class PenEditingTool(QgsMapTool):
         #右クリック
         if button_type==2:
             #新規の確定
-            if self.state=="drawing":
+            if self.state=="plotting" and self.modify==False:
                 self.finish_drawing()
             #編集の確定
-            elif self.state=="editing":
+            elif self.state=="plotting" and self.modify==True:
+                layer.removeSelection()
                 self.finish_editing()
             # 近い地物を選択
             elif self.state=="free":
@@ -309,65 +309,55 @@ class PenEditingTool(QgsMapTool):
                     layer.removeSelection()
                 #選択
                 else:
-                    self.selectNearFeature(layer,pnt)
+                    near,f = self.selectNearFeature(layer,pnt)
+                    # 編集開始（選択地物）
+                    if near:
+                        #  rbに変換して、編集処理
+                        geom = QgsGeometry(f.geometry())
+                        self.check_crs()
+                        if self.layerCRSSrsid != self.projectCRSSrsid:
+                            geom.transform(QgsCoordinateTransform(self.layerCRSSrsid, self.projectCRSSrsid))
+                        self.set_rb()
+                        self.setRubberBandGeom(geom, self.rb)
+                        self.featid = f.id()
+                        self.state = "plotting"
+                        self.modify = True
 
         #左クリック
         elif button_type == 1:
             if self.state=="free":
-
-                near, f = self.getSelectedNearFeature(layer,pnt)
-
-                # 編集開始（選択地物）
-                if near:
-                    #  rbに変換して、編集処理
-                    layer.removeSelection()
-                    geom = QgsGeometry(f.geometry())
-                    self.check_crs()
-                    if self.layerCRSSrsid != self.projectCRSSrsid:
-                        geom.transform(QgsCoordinateTransform(self.layerCRSSrsid, self.projectCRSSrsid))
-                    self.set_rb()
-                    self.setRubberBandGeom(geom, self.rb)
-                    self.set_edit_rb()
-                    self.edit_rb.addPoint(pnt)
-                    self.state = "editing"
-                    self.drawingstate = "dragging"
-                    self.featid = f.id()
-                    self.modify = True
-                # 新規開始
-                else:
-                    self.set_rb()
-                    self.rb.addPoint(pnt) #最初のポイントは同じ点が2つ追加される仕様？
-                    self.startmarker.setCenter(pnt)
-                    self.startmarker.show()
-                    self.state="drawing"
-                    self.drawingstate = "dragging"
-                    self.drawingline =[]
-                    self.drawingidx = 0
-            elif (self.state == "drawing" or self.state == "editing"):
+                self.set_rb()
+                self.rb.addPoint(pnt) #最初のポイントは同じ点が2つ追加される仕様？
+                self.startmarker.setCenter(pnt)
+                self.startmarker.show()
+                self.state="dragging"
+                self.drawingline =[]
+                self.drawingidx = 0
+                self.edit_drawingidx = 0
+            elif self.state == "plotting":
                 # 作成中のrbのラインに近いか
                 geom = self.rb.asGeometry()
                 near, minDistPoint, afterVertex = self.closestPointOfGeometry(pnt, geom)
                 # 編集開始（未確定地物）
-                if near and not self.modify:
+                if near:
                     rbgeom = self.rb.asGeometry()
                     self.setRubberBandGeom(rbgeom, self.rb)
                     self.set_edit_rb()
                     self.edit_rb.addPoint(pnt)
-                    self.drawingstate = "dragging"
-                    self.modify = True
-                    self.log("a")
+                    self.state="editing"
                 # プロット
                 else:
                     pnt = self.toMapCoordinates(event.pos())
-                    if self.modify:
+                    if self.state=="editing":
                         self.edit_rb.addPoint(pnt)
-                        self.log("b")
                     else:
                         self.rb.addPoint(pnt)
-                        self.log("c")
-                    self.drawingstate = "dragging"
+                        self.drawingidx = self.rb.numberOfVertices() - 1
+
+                    self.state="dragging"
                     self.drawingline = []
-                    self.drawingidx = self.rb.numberOfVertices()-1
+
+
 
     def canvasMoveEvent(self, event):
         layer = self.canvas.currentLayer()
@@ -377,33 +367,30 @@ class PenEditingTool(QgsMapTool):
             return
         pnt = self.toMapCoordinates(event.pos())
         #作成中、編集中
-        if (self.state=="drawing" or self.state == "editing") and self.drawingstate=="dragging":
-            if self.modify:
-                self.edit_rb.addPoint(pnt)
-            else:
-                self.rb.addPoint(pnt)
+        if self.state=="dragging":
+            self.rb.addPoint(pnt)
+            self.drawingline.append(pnt)
+        elif self.state=="editing":
+            self.edit_rb.addPoint(pnt)
             self.drawingline.append(pnt)
 
     def canvasReleaseEvent(self, event):
         # ドロー終了
-        if (self.state == "drawing" or self.state == "editing") and self.drawingstate == "dragging":
+        if (self.state == "dragging" or self.state == "editing"):
 
-            if self.modify:
+            if self.state=="editing":
                 #線上にプロットする場合。一旦、modifyになっているので、プロットならプロット処理をする
                 if self.edit_rb.numberOfVertices() == 2:
+                    #既存のオブジェを修正する場合。
                     pnt = self.toMapCoordinates(event.pos())
                     self.rb.addPoint(pnt)
-                    self.modify = False
-                    self.log("g")
                 else:
                     editedgeom = self.rb.asGeometry()
                     rbgeom = self.edit_rb.asGeometry()
                     self.modify_obj(rbgeom, editedgeom)
-                    self.modify = False
                     self.edit_rb.reset()
                     self.edit_rb = None
-                    self.log("d")
-            else:
+            elif self.state=="dragging":
                 #スムーズ処理してrbを付け替える
                 if len(self.drawingline) > 0:
                     rbgeom = self.rb.asGeometry()
@@ -414,10 +401,7 @@ class PenEditingTool(QgsMapTool):
                     d = self.canvas.mapUnitsPerPixel()
                     geom = geom.simplify(tolerance * d)
                     self.setRubberBandGeom(geom,self.rb)
-                    self.log("e")
-                else:
-                    self.log("f")
-            self.drawingstate = "plotting"
+            self.state = "plotting"
 
 
     def setRubberBandGeom(self, geom, rb):
