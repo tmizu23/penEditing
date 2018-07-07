@@ -277,11 +277,11 @@ class PenEditingTool(QgsMapTool):
             if self.state=="plotting" and self.modify==False:
                 self.finish_drawing()
             #編集の確定
-            elif self.state=="plotting" and self.modify==True:
+            elif self.state=="plotting" and self.modify==True and self.rb is not None:
                 layer.removeSelection()
                 self.finish_editing()
             # 近い地物を選択
-            elif self.state=="free":
+            else:
                 selected,f = self.getSelectedNearFeature(layer, pnt)
                 # altを押しながらで切断（選択地物）
                 if self.alt and selected:
@@ -309,19 +309,17 @@ class PenEditingTool(QgsMapTool):
                     layer.removeSelection()
                 #選択
                 else:
+                    layer.removeSelection()
                     near,f = self.selectNearFeature(layer,pnt)
                     # 編集開始（選択地物）
                     if near:
-                        #  rbに変換して、編集処理
-                        geom = QgsGeometry(f.geometry())
-                        self.check_crs()
-                        if self.layerCRSSrsid != self.projectCRSSrsid:
-                            geom.transform(QgsCoordinateTransform(self.layerCRSSrsid, self.projectCRSSrsid))
-                        self.set_rb()
-                        self.setRubberBandGeom(geom, self.rb)
-                        self.featid = f.id()
                         self.state = "plotting"
                         self.modify = True
+                        self.featid = f.id()
+                    else:
+                        self.state = "free"
+                        self.modify = False
+                        self.featid = None
 
         #左クリック
         elif button_type == 1:
@@ -335,6 +333,18 @@ class PenEditingTool(QgsMapTool):
                 self.drawingidx = 0
                 self.edit_drawingidx = 0
             elif self.state == "plotting":
+                if self.modify and self.rb is None:
+                    layer.removeSelection()
+                    #  rbに変換して、編集処理
+                    f = self.getFeatureById(layer, [self.featid])
+                    geom = QgsGeometry(f.geometry())
+                    self.check_crs()
+                    if self.layerCRSSrsid != self.projectCRSSrsid:
+                        geom.transform(QgsCoordinateTransform(self.layerCRSSrsid, self.projectCRSSrsid))
+                    self.set_rb()
+                    self.setRubberBandGeom(geom, self.rb)
+
+
                 # 作成中のrbのラインに近いか
                 geom = self.rb.asGeometry()
                 near, minDistPoint, afterVertex = self.closestPointOfGeometry(pnt, geom)
