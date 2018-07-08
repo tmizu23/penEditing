@@ -9,7 +9,7 @@ def description():
 
 
 def version():
-    return "Version 0.6.3"
+    return "Version 0.6.4"
 
 
 def icon():

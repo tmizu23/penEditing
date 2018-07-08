@@ -4,7 +4,7 @@ name=Pen Editing
 qgisMinimumVersion=2.18
 description=Pen line/polygon editing
 category=Vector
-version=version 0.6.3
+version=version 0.6.4
 author=Takayuki Mizutani
 email=
 ; end of mandatory metadata

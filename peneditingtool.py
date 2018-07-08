@@ -128,9 +128,15 @@ class PenEditingTool(QgsMapTool):
 
         # 終点は離れている.もしくはポリゴンを閉じるような場合
         else:
-            drawline = drawgeom.asPolyline()
-            polyline = editedline[startidx - 8:startidx] + drawline
-            editedline[startidx - 8:] = self.smoothing(polyline)
+            if startidx <= lastidx or startidx >= len(editedline)/2:
+                drawline = drawgeom.asPolyline()
+                polyline = editedline[startidx - 8:startidx] + drawline
+                editedline[startidx - 8:] = self.smoothing(polyline)
+            else:
+                drawline = drawgeom.asPolyline()
+                drawline.reverse()
+                polyline = drawline + editedline[startidx+1:startidx+9]
+                editedline[:startidx +9:] = self.smoothing(polyline)
 
         geom = QgsGeometry().fromPolyline(editedline)
         tolerance = self.get_tolerance()
