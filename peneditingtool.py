@@ -267,61 +267,64 @@ class PenEditingTool(QgsMapTool):
         layer = self.canvas.currentLayer()
         if not layer:
             return
-        if layer.geometryType() != QGis.Line:
+        if layer.type() != QgsMapLayer.VectorLayer:
             return
         button_type = event.button()
         pnt = self.toMapCoordinates(event.pos())
         #右クリック
         if button_type==2:
-            #新規の確定
-            if self.state=="plotting" and self.modify==False:
-                self.finish_drawing()
-            #編集の確定
-            elif self.state=="plotting" and self.modify==True:
-                layer.removeSelection()
-                self.finish_editing()
-            # 近い地物を選択
-            elif self.state=="free":
-                selected,f = self.getSelectedNearFeature(layer, pnt)
-                # altを押しながらで切断（選択地物）
-                if self.alt and selected:
-                    geom = QgsGeometry(f.geometry())
-                    self.check_crs()
-                    if self.layerCRSSrsid != self.projectCRSSrsid:
-                        geom.transform(QgsCoordinateTransform(self.layerCRSSrsid, self.projectCRSSrsid))
-                    near, minDistPoint, afterVertex = self.closestPointOfGeometry(pnt, geom)
-                    polyline = geom.asPolyline()
-                    line1 = polyline[0:afterVertex]
-                    line1.append(minDistPoint)
-                    line2 = polyline[afterVertex:]
-                    line2.insert(0, minDistPoint)
-                    self.createFeature(QgsGeometry.fromPolyline(line2), f)
-                    self.editFeature(QgsGeometry.fromPolyline(line1), f, True)
-                    self.canvas.currentLayer().removeSelection()
-                # 属性ポップアップ
-                elif selected:
-                    layer.beginEditCommand("edit attribute")
-                    dlg = self.iface.getFeatureForm(layer, f)
-                    if dlg.exec_():
-                        layer.endEditCommand()
-                    else:
-                        layer.destroyEditCommand()
+            if layer.geometryType() == QGis.Line:
+                #新規の確定
+                if self.state=="plotting" and self.modify==False:
+                    self.finish_drawing()
+                #編集の確定
+                elif self.state=="plotting" and self.modify==True:
                     layer.removeSelection()
-                #選択
-                else:
-                    near,f = self.selectNearFeature(layer,pnt)
-                    # 編集開始（選択地物）
-                    if near:
-                        #  rbに変換して、編集処理
+                    self.finish_editing()
+                # 近い地物を選択
+                elif self.state=="free":
+                    selected,f = self.getSelectedNearFeature(layer, pnt)
+                    # altを押しながらで切断（選択地物）
+                    if self.alt and selected:
                         geom = QgsGeometry(f.geometry())
                         self.check_crs()
                         if self.layerCRSSrsid != self.projectCRSSrsid:
                             geom.transform(QgsCoordinateTransform(self.layerCRSSrsid, self.projectCRSSrsid))
-                        self.set_rb()
-                        self.setRubberBandGeom(geom, self.rb)
-                        self.featid = f.id()
-                        self.state = "plotting"
-                        self.modify = True
+                        near, minDistPoint, afterVertex = self.closestPointOfGeometry(pnt, geom)
+                        polyline = geom.asPolyline()
+                        line1 = polyline[0:afterVertex]
+                        line1.append(minDistPoint)
+                        line2 = polyline[afterVertex:]
+                        line2.insert(0, minDistPoint)
+                        self.createFeature(QgsGeometry.fromPolyline(line2), f)
+                        self.editFeature(QgsGeometry.fromPolyline(line1), f, True)
+                        self.canvas.currentLayer().removeSelection()
+                    # 属性ポップアップ
+                    elif selected:
+                        layer.beginEditCommand("edit attribute")
+                        dlg = self.iface.getFeatureForm(layer, f)
+                        if dlg.exec_():
+                            layer.endEditCommand()
+                        else:
+                            layer.destroyEditCommand()
+                        layer.removeSelection()
+                    #選択
+                    else:
+                        near,f = self.selectNearFeature(layer,pnt)
+                        # 編集開始（選択地物）
+                        if near:
+                            #  rbに変換して、編集処理
+                            geom = QgsGeometry(f.geometry())
+                            self.check_crs()
+                            if self.layerCRSSrsid != self.projectCRSSrsid:
+                                geom.transform(QgsCoordinateTransform(self.layerCRSSrsid, self.projectCRSSrsid))
+                            self.set_rb()
+                            self.setRubberBandGeom(geom, self.rb)
+                            self.featid = f.id()
+                            self.state = "plotting"
+                            self.modify = True
+            else:
+                QMessageBox.warning(None, "Warning", "Select Line layer!")
 
         #左クリック
         elif button_type == 1:
@@ -363,7 +366,7 @@ class PenEditingTool(QgsMapTool):
         layer = self.canvas.currentLayer()
         if not layer:
             return
-        if layer.geometryType() != QGis.Line:
+        if layer.type() != QgsMapLayer.VectorLayer:
             return
         pnt = self.toMapCoordinates(event.pos())
         #作成中、編集中
