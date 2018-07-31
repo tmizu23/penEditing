@@ -338,6 +338,14 @@ class PenEditingTool(QgsMapTool):
 
         #左クリック
         elif button_type == 1:
+
+            f = self.getFeatureById(layer, [self.featid])
+            # 選択した地物を削除していた場合はfreeに戻す
+            if f is None:
+                self.state = "free"
+                self.modify = False
+                self.featid = None
+
             if self.state=="free":
                 self.set_rb()
                 self.rb.addPoint(pnt) #最初のポイントは同じ点が2つ追加される仕様？
