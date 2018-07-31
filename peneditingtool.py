@@ -175,12 +175,20 @@ class PenEditingTool(QgsMapTool):
         settings = QSettings()
         disable_attributes = settings.value("/qgis/digitizing/disable_enter_attribute_values_dialog", False, type=bool)
         if disable_attributes or feat is not None:
-            layer.addFeature(f)
-            layer.endEditCommand()
+            if layer.geometryType() == QGis.Line:
+                layer.addFeature(f)
+                layer.endEditCommand()
+            else:
+                QMessageBox.warning(None, "Warning", "Select Line layer!")
         else:
             dlg = self.iface.getFeatureForm(layer, f)
             if dlg.exec_():
-                layer.endEditCommand()
+                if layer.geometryType() == QGis.Line:
+                    layer.endEditCommand()
+                else:
+                    QMessageBox.warning(None, "Warning", "Select Line layer!")
+                    layer.destroyEditCommand()
+                    continueFlag = True
             else:
                 layer.destroyEditCommand()
                 reply = QMessageBox.question(None, "Question", "continue?", QMessageBox.Yes,
@@ -279,56 +287,54 @@ class PenEditingTool(QgsMapTool):
         pnt = self.toMapCoordinates(event.pos())
         #右クリック
         if button_type==2:
-            if layer.geometryType() == QGis.Line:
-                #新規の確定
-                if self.state=="plotting" and self.modify==False:
-                    self.finish_drawing()
-                #編集の確定
-                elif self.state=="plotting" and self.modify==True and self.rb is not None:
-                    layer.removeSelection()
-                    self.finish_editing()
-                # 近い地物を選択
-                else:
-                    selected,f = self.getSelectedNearFeature(layer, pnt)
-                    # altを押しながらで切断（選択地物）
-                    if self.alt and selected:
-                        geom = QgsGeometry(f.geometry())
-                        self.check_crs()
-                        if self.layerCRSSrsid != self.projectCRSSrsid:
-                            geom.transform(QgsCoordinateTransform(self.layerCRSSrsid, self.projectCRSSrsid))
-                        near, minDistPoint, afterVertex = self.closestPointOfGeometry(pnt, geom)
-                        polyline = geom.asPolyline()
-                        line1 = polyline[0:afterVertex]
-                        line1.append(minDistPoint)
-                        line2 = polyline[afterVertex:]
-                        line2.insert(0, minDistPoint)
-                        self.createFeature(QgsGeometry.fromPolyline(line2), f)
-                        self.editFeature(QgsGeometry.fromPolyline(line1), f, True)
-                        self.canvas.currentLayer().removeSelection()
-                    # 属性ポップアップ
-                    elif selected:
-                        layer.beginEditCommand("edit attribute")
-                        dlg = self.iface.getFeatureForm(layer, f)
-                        if dlg.exec_():
-                            layer.endEditCommand()
-                        else:
-                            layer.destroyEditCommand()
-                        layer.removeSelection()
-                    #選択
-                    else:
-                        layer.removeSelection()
-                        near,f = self.selectNearFeature(layer,pnt)
-                        # 編集開始（選択地物）
-                        if near:
-                            self.state = "plotting"
-                            self.modify = True
-                            self.featid = f.id()
-                        else:
-                            self.state = "free"
-                            self.modify = False
-                            self.featid = None
+            #新規の確定
+            if self.state=="plotting" and self.modify==False:
+                self.finish_drawing()
+            #編集の確定
+            elif self.state=="plotting" and self.modify==True and self.rb is not None:
+                layer.removeSelection()
+                self.finish_editing()
+            # 近い地物を選択
             else:
-                QMessageBox.warning(None, "Warning", "Select Line layer!")
+                selected,f = self.getSelectedNearFeature(layer, pnt)
+                # altを押しながらで切断（選択地物）
+                if self.alt and selected:
+                    geom = QgsGeometry(f.geometry())
+                    self.check_crs()
+                    if self.layerCRSSrsid != self.projectCRSSrsid:
+                        geom.transform(QgsCoordinateTransform(self.layerCRSSrsid, self.projectCRSSrsid))
+                    near, minDistPoint, afterVertex = self.closestPointOfGeometry(pnt, geom)
+                    polyline = geom.asPolyline()
+                    line1 = polyline[0:afterVertex]
+                    line1.append(minDistPoint)
+                    line2 = polyline[afterVertex:]
+                    line2.insert(0, minDistPoint)
+                    self.createFeature(QgsGeometry.fromPolyline(line2), f)
+                    self.editFeature(QgsGeometry.fromPolyline(line1), f, True)
+                    self.canvas.currentLayer().removeSelection()
+                # 属性ポップアップ
+                elif selected:
+                    layer.beginEditCommand("edit attribute")
+                    dlg = self.iface.getFeatureForm(layer, f)
+                    if dlg.exec_():
+                        layer.endEditCommand()
+                    else:
+                        layer.destroyEditCommand()
+                    layer.removeSelection()
+                #選択
+                else:
+                    layer.removeSelection()
+                    near,f = self.selectNearFeature(layer,pnt)
+                    # 編集開始（選択地物）
+                    if near:
+                        self.state = "plotting"
+                        self.modify = True
+                        self.featid = f.id()
+                    else:
+                        self.state = "free"
+                        self.modify = False
+                        self.featid = None
+
 
         #左クリック
         elif button_type == 1:
