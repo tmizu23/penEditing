@@ -341,7 +341,7 @@ class PenEditingTool(QgsMapTool):
 
             f = self.getFeatureById(layer, [self.featid])
             # 選択した地物を削除していた場合はfreeに戻す
-            if f is None:
+            if self.featid is not None and f is None:
                 self.state = "free"
                 self.modify = False
                 self.featid = None
