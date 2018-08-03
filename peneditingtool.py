@@ -17,9 +17,18 @@ class PenEditingTool(QgsMapTool):
         self.rb = None
         self.edit_rb = None
         self.modify = False
+        self.snapping = True
+        self.snapavoidbool = True
         self.startmarker = QgsVertexMarker(self.canvas)
         self.startmarker.setIconType(QgsVertexMarker.ICON_BOX)
         self.startmarker.hide()
+        self.startpoint = None
+        self.snapmarker = QgsVertexMarker(self.canvas)
+        self.snapmarker.setIconType(QgsVertexMarker.ICON_BOX)
+        self.snapmarker.setColor(QColor(0, 0, 255))
+        self.snapmarker.setPenWidth(2)
+        self.snapmarker.setIconSize(10)
+        self.snapmarker.hide()
         self.featid = None
         self.alt = False
         self.drawingline = []
@@ -284,7 +293,8 @@ class PenEditingTool(QgsMapTool):
         if layer.type() != QgsMapLayer.VectorLayer:
             return
         button_type = event.button()
-        pnt = self.toMapCoordinates(event.pos())
+        self.check_snapsetting()
+        snapped,pnt = self.getSnapPoint(event,layer)
         #右クリック
         if button_type==2:
             #新規の確定
@@ -351,6 +361,7 @@ class PenEditingTool(QgsMapTool):
                 self.rb.addPoint(pnt) #最初のポイントは同じ点が2つ追加される仕様？
                 self.startmarker.setCenter(pnt)
                 self.startmarker.show()
+                self.startpoint = pnt
                 self.state="dragging"
                 self.drawingline =[]
                 self.drawingidx = 0
@@ -380,7 +391,6 @@ class PenEditingTool(QgsMapTool):
                     self.state="editing"
                 # プロット
                 else:
-                    pnt = self.toMapCoordinates(event.pos())
                     if self.state=="editing":
                         self.edit_rb.addPoint(pnt)
                     else:
@@ -390,7 +400,55 @@ class PenEditingTool(QgsMapTool):
                     self.state="dragging"
                     self.drawingline = []
 
+    #描画の開始ポイントとのスナップを調べる
+    def getSelfSnapPoint(self,point):
+        if self.startpoint is not None:
+            p = self.startpoint
+            d = self.canvas.mapUnitsPerPixel() * 4
+            if (p.x() - d <= point.x() <= p.x() + d) and (p.y() - d <= point.y() <= p.y() + d):
+                self.snapmarker.setCenter(p)
+                self.snapmarker.show()
+                return True,p
+        return False,None
 
+    # # 描画中のすべての点とスナップを調べる場合
+    # def getSelfSnapPoint(self,point):
+    #     if self.rb is not None:
+    #         rbgeom = self.rb.asGeometry()
+    #         rbline = rbgeom.asPolyline()
+    #         for p in rbline:
+    #             d = self.canvas.mapUnitsPerPixel() * 4
+    #             if (p.x() - d <= point.x() <= p.x() + d) and (p.y() - d <= point.y() <= p.y() + d):
+    #                 self.snapmarker.setCenter(p)
+    #                 self.snapmarker.show()
+    #                 return True,p
+    #     return False,None
+
+    def getSnapPoint(self,event,layer):
+        snapped = False
+        self.snapmarker.hide()
+        x = event.pos().x()
+        y = event.pos().y()
+        if self.snapping:
+            point = QPoint(x, y)
+            snapper = QgsMapCanvasSnapper(self.canvas)
+            (retval, snapped) = snapper.snapToCurrentLayer(point,QgsSnapper.SnapToVertex)
+            if snapped:
+                point = snapped[0].snappedVertex
+                self.snapmarker.setCenter(point)
+                self.snapmarker.show()
+                #ここのpointはQgsPointになっているので、layerが必要
+                pnt = self.toMapCoordinates(layer,point)
+            else:
+                point = self.toMapCoordinates(point)
+                snapped,point =  self.getSelfSnapPoint(point)
+                if snapped:
+                    pnt = point
+                else:
+                    pnt = self.toMapCoordinates(event.pos())
+        else:
+            pnt = self.toMapCoordinates(event.pos())
+        return snapped,pnt
 
     def canvasMoveEvent(self, event):
         layer = self.canvas.currentLayer()
@@ -398,7 +456,7 @@ class PenEditingTool(QgsMapTool):
             return
         if layer.type() != QgsMapLayer.VectorLayer:
             return
-        pnt = self.toMapCoordinates(event.pos())
+        snapped,pnt = self.getSnapPoint(event,layer)
         #作成中、編集中
         if self.state=="dragging":
             self.rb.addPoint(pnt)
@@ -408,14 +466,17 @@ class PenEditingTool(QgsMapTool):
             self.drawingline.append(pnt)
 
     def canvasReleaseEvent(self, event):
+        layer = self.canvas.currentLayer()
+        if not layer:
+            return
         # ドロー終了
         if (self.state == "dragging" or self.state == "editing"):
-
+            snapped,pnt = self.getSnapPoint(event,layer)
             if self.state=="editing":
                 #線上にプロットする場合。一旦、modifyになっているので、プロットならプロット処理をする
                 if self.edit_rb.numberOfVertices() == 2:
                     #既存のオブジェを修正する場合。
-                    pnt = self.toMapCoordinates(event.pos())
+
                     self.rb.addPoint(pnt)
                 else:
                     editedgeom = self.rb.asGeometry()
@@ -434,6 +495,9 @@ class PenEditingTool(QgsMapTool):
                     d = self.canvas.mapUnitsPerPixel()
                     geom = geom.simplify(tolerance * d)
                     self.setRubberBandGeom(geom,self.rb)
+                    #スナップしていたらスムーズ処理で消えた分を直線で結ぶ
+                    if snapped:
+                        self.rb.addPoint(pnt)
             self.state = "plotting"
 
 
@@ -458,6 +522,7 @@ class PenEditingTool(QgsMapTool):
         self.rb.reset()
         self.rb = None
         self.startmarker.hide()
+        self.startpoint = None
         self.canvas.refresh()
 
     def finish_drawing(self):
@@ -471,6 +536,7 @@ class PenEditingTool(QgsMapTool):
             self.rb.reset()
             self.rb = None
             self.startmarker.hide()
+            self.startpoint = None
             self.canvas.refresh()
 
     def set_rb(self):
@@ -495,12 +561,41 @@ class PenEditingTool(QgsMapTool):
                                        0.000, type=float)
         return tolerance
 
+    def check_snapsetting(self):
+        proj = QgsProject.instance()
+        snapmode = proj.readEntry('Digitizing', 'SnappingMode')[0]
+        # QgsMessageLog.logMessage("snapmode:{}".format(snapmode), 'MyPlugin', QgsMessageLog.INFO)
+        if snapmode == "advanced":
+            snaplayer = proj.readListEntry('Digitizing', 'LayerSnappingList')[0]
+            snapenabled = proj.readListEntry('Digitizing', 'LayerSnappingEnabledList')[0]
+            snapavoid = proj.readListEntry('Digitizing', 'AvoidIntersectionsList')[0]
+            layerid = self.canvas.currentLayer().id()
+            if layerid in snaplayer:  # 新規のレイヤーだとない場合がある？
+                snaptype = snapenabled[snaplayer.index(layerid)]
+                # QgsMessageLog.logMessage("snaptype:{}".format(snaptype), 'MyPlugin', QgsMessageLog.INFO)
+                self.snapavoidbool = self.canvas.currentLayer().id() in snapavoid
+                if snaptype == "disabled":
+                    self.snapping = False
+                else:
+                    self.snapping = True
+            else:
+                self.snapping = True
+        else:
+            snaptype = proj.readEntry('Digitizing', 'DefaultSnapType')[0]
+            if snaptype == "off":
+                self.snapping = False
+            else:
+                self.snapping = True
+            self.snapavoidbool = False
+
     def showSettingsWarning(self):
         pass
 
     def activate(self):
         self.canvas.setCursor(self.cursor)
         self.alt = False
+        self.snapmarker.setColor(QColor(0, 0, 255))
+        self.check_snapsetting()
 
     def deactivate(self):
         pass
