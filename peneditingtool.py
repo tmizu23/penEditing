@@ -427,27 +427,22 @@ class PenEditingTool(QgsMapTool):
     def getSnapPoint(self,event,layer):
         snapped = False
         self.snapmarker.hide()
-        x = event.pos().x()
-        y = event.pos().y()
+        point = event.pos()
+        pnt = self.toMapCoordinates(point)
         if self.snapping:
-            point = QPoint(x, y)
             snapper = QgsMapCanvasSnapper(self.canvas)
-            (retval, snapped) = snapper.snapToCurrentLayer(point,QgsSnapper.SnapToVertex)
-            if snapped:
-                point = snapped[0].snappedVertex
-                self.snapmarker.setCenter(point)
+            (retval, snapped) = snapper.snapToBackgroundLayers(point)
+            if snapped !=[]:
+                snppoint = snapped[0].snappedVertex
+                self.snapmarker.setCenter(snppoint)
                 self.snapmarker.show()
                 #ここのpointはQgsPointになっているので、layerが必要
-                pnt = self.toMapCoordinates(layer,point)
-            else:
-                point = self.toMapCoordinates(point)
-                snapped,point =  self.getSelfSnapPoint(point)
-                if snapped:
-                    pnt = point
-                else:
-                    pnt = self.toMapCoordinates(event.pos())
-        else:
-            pnt = self.toMapCoordinates(event.pos())
+                pnt = self.toMapCoordinates(layer,snppoint)
+
+        point = self.toMapCoordinates(point)
+        snapped,point =  self.getSelfSnapPoint(point)
+        if snapped:
+            pnt = point
         return snapped,pnt
 
     def canvasMoveEvent(self, event):
