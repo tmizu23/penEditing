@@ -404,7 +404,7 @@ class PenEditingTool(QgsMapTool):
     #     return False,None
 
     def getSnapPoint(self,event,layer):
-        snapped = False
+        snaptype = [False, False]
         self.snapmarker.hide()
         point = event.pos()
         pnt = self.toMapCoordinates(point)
@@ -417,12 +417,13 @@ class PenEditingTool(QgsMapTool):
                 self.snapmarker.show()
                 #ここのpointはQgsPointになっているので、layerが必要
                 pnt = self.toMapCoordinates(layer,snppoint)
-
+                snaptype[0] = True
         point = self.toMapCoordinates(point)
         snapped,point =  self.getSelfSnapPoint(point)
         if snapped:
             pnt = point
-        return snapped,pnt
+            snaptype[1] = True
+        return snaptype,pnt
 
     def canvasMoveEvent(self, event):
         layer = self.canvas.currentLayer()
@@ -430,7 +431,7 @@ class PenEditingTool(QgsMapTool):
             return
         if layer.type() != QgsMapLayer.VectorLayer:
             return
-        snapped,pnt = self.getSnapPoint(event,layer)
+        snaptype,pnt = self.getSnapPoint(event,layer)
         #作成中、編集中
         if self.state=="dragging":
             self.rb.addPoint(pnt)
@@ -445,7 +446,7 @@ class PenEditingTool(QgsMapTool):
             return
         # ドロー終了
         if (self.state == "dragging" or self.state == "editing"):
-            snapped,pnt = self.getSnapPoint(event,layer)
+            snaptype,pnt = self.getSnapPoint(event,layer)
             if self.state=="editing":
                 #線上にプロットする場合。一旦、modifyになっているので、プロットならプロット処理をする
                 if self.edit_rb.numberOfVertices() == 2:
@@ -456,6 +457,9 @@ class PenEditingTool(QgsMapTool):
                     editedgeom = self.rb.asGeometry()
                     rbgeom = self.edit_rb.asGeometry()
                     self.modify_obj(rbgeom, editedgeom)
+                    # スナップしていたらスムーズ処理で消えた分を直線で結ぶ
+                    if snaptype[0]:
+                        self.rb.addPoint(pnt)
                     self.edit_rb.reset()
                     self.edit_rb = None
             elif self.state=="dragging":
@@ -470,7 +474,7 @@ class PenEditingTool(QgsMapTool):
                     geom = geom.simplify(tolerance * d)
                     self.setRubberBandGeom(geom,self.rb)
                     #スナップしていたらスムーズ処理で消えた分を直線で結ぶ
-                    if snapped:
+                    if snaptype[0] or snaptype[1]:
                         self.rb.addPoint(pnt)
             self.state = "plotting"
 
