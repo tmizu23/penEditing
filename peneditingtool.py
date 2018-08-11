@@ -32,27 +32,6 @@ class PenEditingTool(QgsMapTool):
         self.featid = None
         self.alt = False
         self.drawingline = []
-        #our own fancy cursor
-        self.cursor = QCursor(QPixmap(["16 16 3 1",
-                                       "      c None",
-                                       ".     c #FF0000",
-                                       "+     c #faed55",
-                                       "                ",
-                                       "       +.+      ",
-                                       "      ++.++     ",
-                                       "     +.....+    ",
-                                       "    +.  .  .+   ",
-                                       "   +.   .   .+  ",
-                                       "  +.    .    .+ ",
-                                       " ++.    .    .++",
-                                       " ... ...+... ...",
-                                       " ++.    .    .++",
-                                       "  +.    .    .+ ",
-                                       "   +.   .   .+  ",
-                                       "   ++.  .  .+   ",
-                                       "    ++.....+    ",
-                                       "      ++.++     ",
-                                       "       +.+      "]))
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Alt:
@@ -587,6 +566,8 @@ class PenEditingTool(QgsMapTool):
         pass
 
     def activate(self):
+        self.cursor = QCursor()
+        self.cursor.setShape(Qt.ArrowCursor)
         self.canvas.setCursor(self.cursor)
         self.alt = False
         self.snapmarker.setColor(QColor(0, 0, 255))
