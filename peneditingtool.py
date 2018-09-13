@@ -310,6 +310,9 @@ class PenEditingTool(QgsMapTool):
                     else:
                         layer.destroyEditCommand()
                     layer.removeSelection()
+                    self.state = "free"
+                    self.modify = False
+                    self.featid = None
                 #選択
                 else:
                     layer.removeSelection()
